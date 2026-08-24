@@ -1,0 +1,115 @@
+name: Build unsigned iPad IPA
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: blender-ipad-m4-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Blender iPad M4 bring-up
+    runs-on: macos-15
+    timeout-minutes: 240
+
+    env:
+      BLENDER_REF: 19542aff486fe6db878ecdbc795999d50499406e
+      KEYBOARD_PR_REF: refs/pull/145484/head
+      KEYBOARD_PR_SHA: 19542aff486fe6db878ecdbc795999d50499406e
+      BUNDLE_ID: com.gorillafkngorgeous.blenderipad
+      SOURCE_DIR: ${{ github.workspace }}/work/blender
+      BUILD_DIR: ${{ github.workspace }}/work/build-ios
+      ARTIFACT_DIR: ${{ github.workspace }}/artifacts
+
+    steps:
+      - name: Check out build harness
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 16.4
+        run: |
+          sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Check host tools and capacity
+        run: |
+          uname -a
+          uname -m
+          cmake --version
+          git lfs version
+          df -h
+
+      - name: Prepare pinned Blender source and libraries
+        run: bash ./scripts/prepare-source.sh "$SOURCE_DIR"
+
+      - name: Configure Xcode project
+        run: |
+          cmake -G Xcode \
+            -S "$SOURCE_DIR" \
+            -B "$BUILD_DIR" \
+            -DAPPLE_TARGET_DEVICE=ios \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=18.0 \
+            -DCMAKE_XCODE_GENERATE_SCHEME=ON \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
+            -DWITH_CYCLES=OFF \
+            -DWITH_FFMPEG=OFF \
+            -DWITH_ALEMBIC=OFF \
+            -DWITH_OPENVDB=OFF \
+            -DWITH_OPENIMAGEDENOISE=OFF \
+            -DWITH_USD=OFF \
+            -DWITH_HYDRA=OFF \
+            -DWITH_INTERNATIONAL=OFF \
+            -DWITH_XR_OPENXR=OFF \
+            -DWITH_OPENSUBDIV=ON
+
+          xcodebuild -project "$BUILD_DIR/Blender.xcodeproj" -list
+
+      - name: Build unsigned device application
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project "$BUILD_DIR/Blender.xcodeproj" \
+            -target blender \
+            -configuration Release \
+            -sdk iphoneos \
+            -jobs 3 \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY= \
+            build 2>&1 | tee "$GITHUB_WORKSPACE/xcodebuild.log"
+
+      - name: Package unsigned IPA
+        run: |
+          bash ./scripts/package-ipa.sh \
+            "$BUILD_DIR" \
+            "$ARTIFACT_DIR/Blender-iPad-M4-unsigned.ipa"
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: Blender-iPad-M4-unsigned
+          path: artifacts/Blender-iPad-M4-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Blender-iPad-M4-build-diagnostics
+          path: |
+            xcodebuild.log
+            work/build-ios/CMakeCache.txt
+            work/build-ios/CMakeFiles/CMakeOutput.log
+            work/build-ios/CMakeFiles/CMakeError.log
+          if-no-files-found: ignore
+          retention-days: 14
