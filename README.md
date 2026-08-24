@@ -33,6 +33,14 @@ GitHub Actions run [`32698659708`](https://github.com/gorillaFKNgorgeous/-blende
 - The executable target compiled, but the resulting IPA omitted Blender's installed `Assets` tree and closes immediately when launched. Do not use that artifact.
 - The workflow now builds Blender's `install` target and refuses to package an app without its UI startup scripts, bundled `.blend` assets, and at least 100 asset files. (The iOS target embeds `startup.blend` into the executable.)
 
+Corrected GitHub Actions run [`32707024830`](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/actions/runs/32707024830) completed successfully on 24 August 2026:
+
+- The complete app bundle contains 2,613 asset files and is 605 MiB uncompressed.
+- The unsigned IPA is 189,000,156 bytes and contains 3,048 archive entries.
+- All 80 Mach-O executables, dynamic libraries, and Python extensions report arm64.
+- Unsigned IPA SHA-256: `a8d8ef92e25bb8fc37112e3963692016a942cadbb3e25fc4711357351e990991`.
+- GitHub artifact: `Blender-iPad-M4-unsigned`, retained until 7 September 2026.
+
 ## Local macOS build
 
 On an Apple-silicon Mac with Xcode 16.4 selected:
