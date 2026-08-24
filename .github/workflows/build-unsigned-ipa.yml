@@ -63,6 +63,7 @@ jobs:
             -DCMAKE_XCODE_GENERATE_SCHEME=ON \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
+            -DBLENDER_IOS_SKIP_INSTALL_CODESIGN=ON \
             -DWITH_CYCLES=OFF \
             -DWITH_FFMPEG=OFF \
             -DWITH_ALEMBIC=OFF \
@@ -76,12 +77,12 @@ jobs:
 
           xcodebuild -project "$BUILD_DIR/Blender.xcodeproj" -list
 
-      - name: Build unsigned device application
+      - name: Build and install unsigned device application
         run: |
           set -o pipefail
           xcodebuild \
             -project "$BUILD_DIR/Blender.xcodeproj" \
-            -target blender \
+            -target install \
             -configuration Release \
             -sdk iphoneos \
             -jobs 3 \

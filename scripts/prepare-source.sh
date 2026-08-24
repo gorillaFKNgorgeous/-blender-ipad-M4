@@ -70,6 +70,7 @@ git -C "$SOURCE_DIR" lfs pull origin
 
 info_plist="$SOURCE_DIR/release/ios/Blender.app/Info.plist"
 entitlements="$SOURCE_DIR/release/ios/entitlements.plist"
+creator_cmake="$SOURCE_DIR/source/creator/CMakeLists.txt"
 
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$info_plist"
 
@@ -87,6 +88,29 @@ fi
 /usr/libexec/PlistBuddy \
   -c "Delete :com.apple.developer.kernel.increased-memory-limit" \
   "$info_plist" >/dev/null 2>&1 || true
+
+# Blender's iOS install step normally re-signs bundled libraries with the
+# developer identity from the local macOS keychain. GitHub's unsigned build has
+# no such identity; Signulous signs the complete bundle after the IPA is built.
+# Keep the upstream behavior by default and skip only that block when the cloud
+# build opts in with -DBLENDER_IOS_SKIP_INSTALL_CODESIGN=ON.
+codesign_guard_matches="$(perl -0ne '
+  while (/if\(WITH_APPLE_CROSSPLATFORM\)(?=.{0,1000}codesign)/sg) { $count++ }
+  END { print $count || 0 }
+' "$creator_cmake")"
+
+if [[ "$codesign_guard_matches" != "1" ]]; then
+  echo "Expected one iOS install-time codesign block, found $codesign_guard_matches" >&2
+  exit 1
+fi
+
+perl -0pi -e '
+  s/if\(WITH_APPLE_CROSSPLATFORM\)(?=.{0,1000}codesign)/if(WITH_APPLE_CROSSPLATFORM AND NOT BLENDER_IOS_SKIP_INSTALL_CODESIGN)/s
+' "$creator_cmake"
+
+grep -Fq \
+  'if(WITH_APPLE_CROSSPLATFORM AND NOT BLENDER_IOS_SKIP_INSTALL_CODESIGN)' \
+  "$creator_cmake"
 
 echo "Prepared Blender source at $SOURCE_DIR"
 echo "Blender revision: $actual_blender_ref"
