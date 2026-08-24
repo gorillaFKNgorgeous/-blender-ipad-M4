@@ -1,0 +1,7 @@
+work/
+build/
+artifacts/
+*.ipa
+*.xcarchive
+*.log
+
