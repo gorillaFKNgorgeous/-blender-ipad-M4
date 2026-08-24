@@ -31,7 +31,7 @@ GitHub Actions run [`32698659708`](https://github.com/gorillaFKNgorgeous/-blende
 - The application executable is a 64-bit arm64 Mach-O.
 - Bundle identifier: `com.gorillafkngorgeous.blenderipad`.
 - The executable target compiled, but the resulting IPA omitted Blender's installed `Assets` tree and closes immediately when launched. Do not use that artifact.
-- The workflow now builds Blender's `install` target and refuses to package an app without `startup.blend`, Python scripts, and at least 100 asset files.
+- The workflow now builds Blender's `install` target and refuses to package an app without its UI startup scripts, bundled `.blend` assets, and at least 100 asset files. (The iOS target embeds `startup.blend` into the executable.)
 
 ## Local macOS build
 

@@ -13,10 +13,12 @@ while IFS= read -r candidate; do
   [[ -n "$executable" && -f "$candidate/$executable" ]] || continue
 
   assets_dir="$candidate/Assets"
-  startup_blend="$(find "$assets_dir" -type f -path '*/datafiles/startup.blend' -print -quit 2>/dev/null || true)"
-  python_script="$(find "$assets_dir" -type f -name '*.py' -print -quit 2>/dev/null || true)"
+  ui_startup_script="$(find "$assets_dir" -type f -path '*/scripts/startup/bl_ui/__init__.py' -print -quit 2>/dev/null || true)"
+  bundled_blend_asset="$(find "$assets_dir" -type f -name '*.blend' -path '*/datafiles/assets/*' -print -quit 2>/dev/null || true)"
 
-  if [[ ! -d "$assets_dir" || -z "$startup_blend" || -z "$python_script" ]]; then
+  # The iOS target compiles startup.blend into the executable, so validate the
+  # installed UI startup scripts and bundled .blend assets instead.
+  if [[ ! -d "$assets_dir" || -z "$ui_startup_script" || -z "$bundled_blend_asset" ]]; then
     echo "Ignoring incomplete app bundle: $candidate" >&2
     continue
   fi
@@ -26,7 +28,7 @@ while IFS= read -r candidate; do
 done < <(find "$BUILD_DIR" -type d \( -name 'Blender.app' -o -name 'blender.app' \) -print)
 
 if [[ -z "$app_path" ]]; then
-  echo "No complete Blender.app with executable, startup.blend, and Python resources found below $BUILD_DIR" >&2
+  echo "No complete Blender.app with executable, UI startup scripts, and bundled .blend assets found below $BUILD_DIR" >&2
   find "$BUILD_DIR" -maxdepth 5 -type d -name '*.app' -print >&2 || true
   exit 1
 fi
