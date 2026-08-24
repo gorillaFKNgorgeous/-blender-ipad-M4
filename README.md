@@ -45,7 +45,7 @@ cmake -G Xcode \
   -DWITH_OPENIMAGEDENOISE=OFF \
   -DWITH_USD=OFF \
   -DWITH_HYDRA=OFF \
-  -DWITH_INTERNATIONAL=OFF
+  -DWITH_INTERNATIONAL=ON
 
 xcodebuild \
   -project "$PWD/work/build-ios/Blender.xcodeproj" \
