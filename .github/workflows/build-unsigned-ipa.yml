@@ -77,6 +77,7 @@ jobs:
           download_cmake="$SOURCE_DIR/build_files/build_environment/cmake/download.cmake"
           dependency_cmakelists="$SOURCE_DIR/build_files/build_environment/CMakeLists.txt"
           python_cmake="$SOURCE_DIR/build_files/build_environment/cmake/python.cmake"
+          eigen_cmake="$SOURCE_DIR/build_files/build_environment/cmake/eigen.cmake"
 
           mkdir -p "$host_deps_root/deps_arm64/Release"
           ln -s "$SOURCE_DIR/lib/macos_arm64/python" \
@@ -94,13 +95,14 @@ jobs:
           test "$(grep -Fc '${LIBDIR}/python/lib/python3.13/' "$python_cmake")" -eq 1
 
           # Blender's dependency configure normally downloads every supported
-          # package before any target is selected. This bootstrap only builds
-          # Python, so retain Python and its six direct library dependencies.
+          # package before any target is selected. Retain Python and its direct
+          # libraries plus fmt and Eigen, which Blender 5.1.2 requires but the
+          # current iOS dependency bundle does not contain.
           perl -0pi -e '
-            s/^download_source\((?!ZLIB\)|PYTHON\)|BZIP2\)|FFI\)|LZMA\)|SSL\)|SQLITE\))([A-Z0-9_]+)\)$/# Python-only iOS bootstrap skips $1/mg
+            s/^download_source\((?!ZLIB\)|PYTHON\)|BZIP2\)|FFI\)|LZMA\)|SSL\)|SQLITE\)|FMT\)|EIGEN\))([A-Z0-9_]+)\)$/# Focused iOS bootstrap skips $1/mg
           ' "$download_cmake"
 
-          test "$(grep -c '^download_source(' "$download_cmake")" -eq 7
+          test "$(grep -c '^download_source(' "$download_cmake")" -eq 9
 
           # CMake also configures every dependency file even when only the
           # external_python target is requested. Keep the dependency project
@@ -108,10 +110,18 @@ jobs:
           # cannot require missing host tools such as ISPC.
           perl -0pi -e '
             s{^(\s*)include\(cmake/([^)]+)\)$}{$1# Python-only iOS bootstrap skips cmake/$2}mg;
-            s{^(\s*)# Python-only iOS bootstrap skips cmake/(check_software|options|versions|download|macros|check_compilers|harvest|ssl|zlib|python|ffi|sqlite|bzip2|lzma)\.cmake$}{$1include(cmake/$2.cmake)}mg
+            s{^(\s*)# Python-only iOS bootstrap skips cmake/(check_software|options|versions|download|macros|check_compilers|harvest|ssl|zlib|python|ffi|sqlite|bzip2|lzma|fmt|eigen)\.cmake$}{$1include(cmake/$2.cmake)}mg
           ' "$dependency_cmakelists"
 
-          test "$(grep -c '^[[:space:]]*include(cmake/' "$dependency_cmakelists")" -eq 14
+          test "$(grep -c '^[[:space:]]*include(cmake/' "$dependency_cmakelists")" -eq 16
+
+          # Eigen is header-only here; point its optional TBB discovery at the
+          # already bundled iOS TBB package instead of this focused build tree.
+          perl -0pi -e '
+            s{\$\{LIBDIR\}/tbb/lib/cmake/TBB}{\$\{HARVEST_TARGET\}/tbb/lib/cmake/TBB}g
+          ' "$eigen_cmake"
+
+          test "$(grep -Fc '${HARVEST_TARGET}/tbb/lib/cmake/TBB' "$eigen_cmake")" -eq 1
 
           cmake \
             -S "$SOURCE_DIR/build_files/build_environment" \
@@ -126,7 +136,7 @@ jobs:
             2>&1 | tee "$GITHUB_WORKSPACE/python-deps-configure.log"
 
           cmake --build "$python_deps_build" \
-            --target external_python \
+            --target external_python external_fmt external_eigen \
             --parallel 3 \
             2>&1 | tee "$GITHUB_WORKSPACE/python-deps-build.log"
 
@@ -134,12 +144,23 @@ jobs:
             "$python_deps_build/Release/python/" \
             "$SOURCE_DIR/lib/ios_arm64/python/"
 
+          rsync -a \
+            "$python_deps_build/Release/fmt/" \
+            "$SOURCE_DIR/lib/ios_arm64/fmt/"
+
+          rsync -a \
+            "$python_deps_build/Release/eigen/" \
+            "$SOURCE_DIR/lib/ios_arm64/eigen/"
+
       - name: Verify bundled Python 3.13 dependency layout
         run: |
           test -x "$SOURCE_DIR/lib/macos_arm64/python/bin/python3.13"
           test -f "$SOURCE_DIR/lib/ios_arm64/python/include/python3.13/Python.h"
           test -f "$SOURCE_DIR/lib/ios_arm64/python/include/python3.13/pyconfig.h"
           test -f "$SOURCE_DIR/lib/ios_arm64/python/lib/libpython3.13.a"
+          test -f "$SOURCE_DIR/lib/ios_arm64/fmt/lib/libfmt.a"
+          test -f "$SOURCE_DIR/lib/ios_arm64/fmt/lib/cmake/fmt/fmt-config.cmake"
+          test -f "$SOURCE_DIR/lib/ios_arm64/eigen/share/eigen3/cmake/Eigen3Config.cmake"
 
       - name: Configure Xcode project
         run: |
@@ -150,6 +171,9 @@ jobs:
           test -f "$SOURCE_DIR/lib/ios_arm64/openexr/lib/libIex.dylib"
           test -f "$SOURCE_DIR/lib/ios_arm64/openexr/lib/libIlmThread.dylib"
           test -f "$SOURCE_DIR/lib/ios_arm64/imath/lib/libImath.dylib"
+          test -f "$SOURCE_DIR/lib/ios_arm64/openimageio/lib/libOpenImageIO.dylib"
+          test -f "$SOURCE_DIR/lib/ios_arm64/openimageio/lib/libOpenImageIO_Util.dylib"
+          test -x "$SOURCE_DIR/lib/macos_arm64/openimageio/bin/oiiotool"
 
           # The current iOS library bundle contains OpenEXR and Imath but omits
           # their CMake package metadata. Define the imported target expected by
@@ -165,10 +189,27 @@ jobs:
               set(OpenEXR_VERSION 3.3.2)
             else()
               find_package(OpenEXR REQUIRED)
+            endif()}m;
+
+            s{^find_package\(OpenImageIO REQUIRED\)$}{if(WITH_APPLE_CROSSPLATFORM)
+              add_library(OpenImageIO::OpenImageIO INTERFACE IMPORTED)
+              set_target_properties(OpenImageIO::OpenImageIO PROPERTIES
+                INTERFACE_INCLUDE_DIRECTORIES "\${LIBDIR}/openimageio/include"
+                INTERFACE_LINK_LIBRARIES "\${LIBDIR}/openimageio/lib/libOpenImageIO.dylib;\${LIBDIR}/openimageio/lib/libOpenImageIO_Util.dylib"
+              )
+              add_executable(OpenImageIO::oiiotool IMPORTED)
+              set_target_properties(OpenImageIO::oiiotool PROPERTIES
+                IMPORTED_LOCATION "\${CMAKE_SOURCE_DIR}/lib/macos_arm64/openimageio/bin/oiiotool"
+              )
+              set(OpenImageIO_FOUND TRUE)
+              set(OpenImageIO_VERSION 3.0.6)
+            else()
+              find_package(OpenImageIO REQUIRED)
             endif()}m
           ' "$platform_apple_cmake"
 
           test "$(grep -Fc 'add_library(OpenEXR::OpenEXR INTERFACE IMPORTED)' "$platform_apple_cmake")" -eq 1
+          test "$(grep -Fc 'add_library(OpenImageIO::OpenImageIO INTERFACE IMPORTED)' "$platform_apple_cmake")" -eq 1
 
           cmake -G Xcode \
             -S "$SOURCE_DIR" \
@@ -186,6 +227,7 @@ jobs:
             -DPYTHON_INCLUDE_CONFIG_DIR="$SOURCE_DIR/lib/ios_arm64/python/include/python3.13" \
             -DPYTHON_LIBRARY="$SOURCE_DIR/lib/ios_arm64/python/lib/libpython3.13.a" \
             -DPYTHON_LIBPATH="$SOURCE_DIR/lib/ios_arm64/python/lib" \
+            -DEigen3_DIR="$SOURCE_DIR/lib/ios_arm64/eigen/share/eigen3/cmake" \
             -DWITH_CYCLES=OFF \
             -DWITH_CODEC_FFMPEG=OFF \
             -DWITH_ALEMBIC=OFF \
@@ -193,6 +235,7 @@ jobs:
             -DWITH_OPENIMAGEDENOISE=OFF \
             -DWITH_USD=OFF \
             -DWITH_HYDRA=OFF \
+            -DWITH_LIBMV=OFF \
             -DWITH_INTERNATIONAL=ON \
             -DWITH_XR_OPENXR=OFF \
             -DWITH_OPENSUBDIV=ON
