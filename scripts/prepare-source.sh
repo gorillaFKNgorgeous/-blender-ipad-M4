@@ -4,9 +4,8 @@ set -Eeuo pipefail
 
 SOURCE_DIR="${1:-$PWD/work/blender}"
 UPSTREAM_URL="${BLENDER_UPSTREAM_URL:-https://projects.blender.org/blender/blender.git}"
-KEYBOARD_PR_REF="${KEYBOARD_PR_REF:-refs/pull/145484/head}"
-KEYBOARD_PR_SHA="${KEYBOARD_PR_SHA:-19542aff486fe6db878ecdbc795999d50499406e}"
-BLENDER_REF="${BLENDER_REF:-$KEYBOARD_PR_SHA}"
+IOS_5_1_2_SHA="${IOS_5_1_2_SHA:-a1de44dd54af75a4c8c4a29a5fed2a1334a87446}"
+BLENDER_REF="${BLENDER_REF:-$IOS_5_1_2_SHA}"
 BUNDLE_ID="${BUNDLE_ID:-com.gorillafkngorgeous.blenderipad}"
 
 if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
@@ -26,6 +25,11 @@ if [[ -e "$SOURCE_DIR" ]]; then
   exit 1
 fi
 
+if [[ "$BLENDER_REF" != "$IOS_5_1_2_SHA" ]]; then
+  echo "BLENDER_REF must match the verified Blender iOS 5.1.2 revision." >&2
+  exit 1
+fi
+
 mkdir -p "$(dirname "$SOURCE_DIR")"
 
 git clone \
@@ -37,27 +41,15 @@ git clone \
   "$SOURCE_DIR"
 
 git -C "$SOURCE_DIR" lfs install --local --skip-smudge
-git -C "$SOURCE_DIR" fetch --no-tags --depth 1 origin "$KEYBOARD_PR_REF"
+git -C "$SOURCE_DIR" fetch --no-tags --depth 1 origin "$BLENDER_REF"
 
-actual_keyboard_ref="$(git -C "$SOURCE_DIR" rev-parse FETCH_HEAD)"
-if [[ "$actual_keyboard_ref" != "$KEYBOARD_PR_SHA" ]]; then
-  echo "Pinned keyboard PR revision mismatch: $actual_keyboard_ref" >&2
-  exit 1
-fi
-
-if [[ "$BLENDER_REF" != "$KEYBOARD_PR_SHA" ]]; then
-  echo "BLENDER_REF must match the verified keyboard PR revision." >&2
-  exit 1
-fi
-
-git -C "$SOURCE_DIR" checkout --detach "$BLENDER_REF"
-
-actual_blender_ref="$(git -C "$SOURCE_DIR" rev-parse HEAD)"
+actual_blender_ref="$(git -C "$SOURCE_DIR" rev-parse FETCH_HEAD)"
 if [[ "$actual_blender_ref" != "$BLENDER_REF" ]]; then
-  echo "Pinned Blender revision mismatch: $actual_blender_ref" >&2
+  echo "Pinned Blender iOS 5.1.2 revision mismatch: $actual_blender_ref" >&2
   exit 1
 fi
 
+git -C "$SOURCE_DIR" checkout --detach "$actual_blender_ref"
 git -C "$SOURCE_DIR" lfs pull origin
 
 (
@@ -91,7 +83,7 @@ fi
 
 # Blender's iOS install step normally re-signs bundled libraries with the
 # developer identity from the local macOS keychain. GitHub's unsigned build has
-# no such identity; Signulous signs the complete bundle after the IPA is built.
+# no such identity; the complete bundle is signed after the IPA is built.
 # Keep the upstream behavior by default and skip only that block when the cloud
 # build opts in with -DBLENDER_IOS_SKIP_INSTALL_CODESIGN=ON.
 codesign_guard_matches="$(perl -0ne '
@@ -112,7 +104,6 @@ grep -Fq \
   'if(WITH_APPLE_CROSSPLATFORM AND NOT BLENDER_IOS_SKIP_INSTALL_CODESIGN)' \
   "$creator_cmake"
 
-echo "Prepared Blender source at $SOURCE_DIR"
+echo "Prepared Blender iOS 5.1.2 source at $SOURCE_DIR"
 echo "Blender revision: $actual_blender_ref"
-echo "Keyboard PR revision: $actual_keyboard_ref"
 echo "Bundle identifier: $BUNDLE_ID"
