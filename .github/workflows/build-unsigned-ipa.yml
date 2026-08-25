@@ -1,9 +1,10 @@
-name: Build unsigned iPad IPA
+name: Build unsigned Blender 5.1.2 iPad IPA
 
 on:
   push:
     branches:
       - main
+      - upgrade/ios-5.1.2
     paths:
       - .github/workflows/build-unsigned-ipa.yml
       - scripts/**
@@ -18,14 +19,12 @@ permissions:
 
 jobs:
   build:
-    name: Blender iPad M4 bring-up
+    name: Blender 5.1.2 iPad M4 bring-up
     runs-on: macos-15
     timeout-minutes: 240
 
     env:
-      BLENDER_REF: 19542aff486fe6db878ecdbc795999d50499406e
-      KEYBOARD_PR_REF: refs/pull/145484/head
-      KEYBOARD_PR_SHA: 19542aff486fe6db878ecdbc795999d50499406e
+      BLENDER_REF: a1de44dd54af75a4c8c4a29a5fed2a1334a87446
       BUNDLE_ID: com.gorillafkngorgeous.blenderipad
       SOURCE_DIR: ${{ github.workspace }}/work/blender
       BUILD_DIR: ${{ github.workspace }}/work/build-ios
@@ -49,7 +48,7 @@ jobs:
           git lfs version
           df -h
 
-      - name: Prepare pinned Blender source and libraries
+      - name: Prepare pinned Blender iOS 5.1.2 source and libraries
         run: bash ./scripts/prepare-source.sh "$SOURCE_DIR"
 
       - name: Configure Xcode project
@@ -95,13 +94,13 @@ jobs:
         run: |
           bash ./scripts/package-ipa.sh \
             "$BUILD_DIR" \
-            "$ARTIFACT_DIR/Blender-iPad-M4-unsigned.ipa"
+            "$ARTIFACT_DIR/Blender-iPad-M4-5.1.2-unsigned.ipa"
 
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
-          name: Blender-iPad-M4-unsigned
-          path: artifacts/Blender-iPad-M4-unsigned.ipa
+          name: Blender-iPad-M4-5.1.2-unsigned
+          path: artifacts/Blender-iPad-M4-5.1.2-unsigned.ipa
           if-no-files-found: error
           retention-days: 14
 
@@ -109,7 +108,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Blender-iPad-M4-build-diagnostics
+          name: Blender-iPad-M4-5.1.2-build-diagnostics
           path: |
             xcodebuild.log
             work/build-ios/CMakeCache.txt
