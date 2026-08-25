@@ -236,6 +236,7 @@ jobs:
             -DWITH_USD=OFF \
             -DWITH_HYDRA=OFF \
             -DWITH_LIBMV=OFF \
+            -DWITH_RUBBERBAND=OFF \
             -DWITH_INTERNATIONAL=ON \
             -DWITH_XR_OPENXR=OFF \
             -DWITH_OPENSUBDIV=ON
