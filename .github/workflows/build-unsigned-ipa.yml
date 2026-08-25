@@ -91,7 +91,7 @@ jobs:
             s{\$\{BUILD_DIR\}/python/src/external_python/build/lib\.darwin-3\.13/}{\$\{LIBDIR\}/python/lib/python3.13/}g
           ' "$python_cmake"
 
-          test "$(grep -Fc '\${LIBDIR}/python/lib/python3.13/' "$python_cmake")" -eq 1
+          test "$(grep -Fc '${LIBDIR}/python/lib/python3.13/' "$python_cmake")" -eq 1
 
           # Blender's dependency configure normally downloads every supported
           # package before any target is selected. This bootstrap only builds
