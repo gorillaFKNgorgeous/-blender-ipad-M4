@@ -76,10 +76,22 @@ jobs:
           python_deps_build="$GITHUB_WORKSPACE/work/deps-ios-python"
           download_cmake="$SOURCE_DIR/build_files/build_environment/cmake/download.cmake"
           dependency_cmakelists="$SOURCE_DIR/build_files/build_environment/CMakeLists.txt"
+          python_cmake="$SOURCE_DIR/build_files/build_environment/cmake/python.cmake"
 
           mkdir -p "$host_deps_root/deps_arm64/Release"
           ln -s "$SOURCE_DIR/lib/macos_arm64/python" \
             "$host_deps_root/deps_arm64/Release/python"
+          mkdir -p \
+            "$host_deps_root/deps_arm64/Release/python/lib/python3.13"
+
+          # Blender 5.1.2 hard-codes the pre-install CPython build directory for
+          # its iOS sysconfig copy. Python 3.13.9 reliably installs that file
+          # before this after_install step, so copy from the installed tree.
+          perl -0pi -e '
+            s{\$\{BUILD_DIR\}/python/src/external_python/build/lib\.darwin-3\.13/}{\$\{LIBDIR\}/python/lib/python3.13/}g
+          ' "$python_cmake"
+
+          test "$(grep -Fc '\${LIBDIR}/python/lib/python3.13/' "$python_cmake")" -eq 1
 
           # Blender's dependency configure normally downloads every supported
           # package before any target is selected. This bootstrap only builds
