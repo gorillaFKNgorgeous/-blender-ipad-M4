@@ -51,6 +51,13 @@ jobs:
       - name: Prepare pinned Blender iOS 5.1.2 source and libraries
         run: bash ./scripts/prepare-source.sh "$SOURCE_DIR"
 
+      - name: Verify bundled Python 3.13 dependency layout
+        run: |
+          test -x "$SOURCE_DIR/lib/macos_arm64/python/bin/python3.13"
+          test -f "$SOURCE_DIR/lib/ios_arm64/python/include/python3.13/Python.h"
+          test -f "$SOURCE_DIR/lib/ios_arm64/python/include/python3.13/pyconfig.h"
+          test -f "$SOURCE_DIR/lib/ios_arm64/python/lib/libpython3.13.a"
+
       - name: Configure Xcode project
         run: |
           cmake -G Xcode \
@@ -63,8 +70,14 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
             -DBLENDER_IOS_SKIP_INSTALL_CODESIGN=ON \
+            -DPYTHON_VERSION=3.13 \
+            -DPYTHON_EXECUTABLE="$SOURCE_DIR/lib/macos_arm64/python/bin/python3.13" \
+            -DPYTHON_INCLUDE_DIR="$SOURCE_DIR/lib/ios_arm64/python/include/python3.13" \
+            -DPYTHON_INCLUDE_CONFIG_DIR="$SOURCE_DIR/lib/ios_arm64/python/include/python3.13" \
+            -DPYTHON_LIBRARY="$SOURCE_DIR/lib/ios_arm64/python/lib/libpython3.13.a" \
+            -DPYTHON_LIBPATH="$SOURCE_DIR/lib/ios_arm64/python/lib" \
             -DWITH_CYCLES=OFF \
-            -DWITH_FFMPEG=OFF \
+            -DWITH_CODEC_FFMPEG=OFF \
             -DWITH_ALEMBIC=OFF \
             -DWITH_OPENVDB=OFF \
             -DWITH_OPENIMAGEDENOISE=OFF \
