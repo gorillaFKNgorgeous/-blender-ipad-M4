@@ -70,12 +70,24 @@ jobs:
 
       - name: Build Blender's bundled Python 3.13 for iOS
         run: |
+          set -o pipefail
+
           host_deps_root="$GITHUB_WORKSPACE/work/host-deps"
           python_deps_build="$GITHUB_WORKSPACE/work/deps-ios-python"
+          download_cmake="$SOURCE_DIR/build_files/build_environment/cmake/download.cmake"
 
           mkdir -p "$host_deps_root/deps_arm64/Release"
           ln -s "$SOURCE_DIR/lib/macos_arm64/python" \
             "$host_deps_root/deps_arm64/Release/python"
+
+          # Blender's dependency configure normally downloads every supported
+          # package before any target is selected. This bootstrap only builds
+          # Python, so retain Python and its six direct library dependencies.
+          perl -0pi -e '
+            s/^download_source\((?!ZLIB\)|PYTHON\)|BZIP2\)|FFI\)|LZMA\)|SSL\)|SQLITE\))([A-Z0-9_]+)\)$/# Python-only iOS bootstrap skips $1/mg
+          ' "$download_cmake"
+
+          test "$(grep -c '^download_source(' "$download_cmake")" -eq 7
 
           cmake \
             -S "$SOURCE_DIR/build_files/build_environment" \
@@ -86,11 +98,13 @@ jobs:
             -DCMAKE_DEPS_CROSSCOMPILE_BUILDDIR="$host_deps_root" \
             -DCMAKE_DEPS_CROSSCOMPILE_INSTALLDIR="$SOURCE_DIR/lib/macos_arm64" \
             -DHARVEST_TARGET="$SOURCE_DIR/lib/ios_arm64" \
-            -DMAKE_THREADS=3
+            -DMAKE_THREADS=3 \
+            2>&1 | tee "$GITHUB_WORKSPACE/python-deps-configure.log"
 
           cmake --build "$python_deps_build" \
             --target external_python \
-            --parallel 3
+            --parallel 3 \
+            2>&1 | tee "$GITHUB_WORKSPACE/python-deps-build.log"
 
           rsync -a \
             "$python_deps_build/Release/python/" \
@@ -169,6 +183,8 @@ jobs:
           name: Blender-iPad-M4-5.1.2-build-diagnostics
           path: |
             xcodebuild.log
+            python-deps-configure.log
+            python-deps-build.log
             work/build-ios/CMakeCache.txt
             work/build-ios/CMakeFiles/CMakeOutput.log
             work/build-ios/CMakeFiles/CMakeError.log
