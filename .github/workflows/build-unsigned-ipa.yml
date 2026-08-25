@@ -75,6 +75,7 @@ jobs:
           host_deps_root="$GITHUB_WORKSPACE/work/host-deps"
           python_deps_build="$GITHUB_WORKSPACE/work/deps-ios-python"
           download_cmake="$SOURCE_DIR/build_files/build_environment/cmake/download.cmake"
+          dependency_cmakelists="$SOURCE_DIR/build_files/build_environment/CMakeLists.txt"
 
           mkdir -p "$host_deps_root/deps_arm64/Release"
           ln -s "$SOURCE_DIR/lib/macos_arm64/python" \
@@ -88,6 +89,17 @@ jobs:
           ' "$download_cmake"
 
           test "$(grep -c '^download_source(' "$download_cmake")" -eq 7
+
+          # CMake also configures every dependency file even when only the
+          # external_python target is requested. Keep the dependency project
+          # limited to Python and its direct libraries so unrelated packages
+          # cannot require missing host tools such as ISPC.
+          perl -0pi -e '
+            s{^(\s*)include\(cmake/([^)]+)\)$}{$1# Python-only iOS bootstrap skips cmake/$2}mg;
+            s{^(\s*)# Python-only iOS bootstrap skips cmake/(check_software|options|versions|download|macros|check_compilers|harvest|ssl|zlib|python|ffi|sqlite|bzip2|lzma)\.cmake$}{$1include(cmake/$2.cmake)}mg
+          ' "$dependency_cmakelists"
+
+          test "$(grep -c '^[[:space:]]*include(cmake/' "$dependency_cmakelists")" -eq 14
 
           cmake \
             -S "$SOURCE_DIR/build_files/build_environment" \
