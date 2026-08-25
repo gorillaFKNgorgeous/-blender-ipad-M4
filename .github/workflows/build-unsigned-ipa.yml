@@ -143,6 +143,33 @@ jobs:
 
       - name: Configure Xcode project
         run: |
+          platform_apple_cmake="$SOURCE_DIR/build_files/cmake/platform/platform_apple.cmake"
+
+          test -f "$SOURCE_DIR/lib/ios_arm64/openexr/lib/libOpenEXR.dylib"
+          test -f "$SOURCE_DIR/lib/ios_arm64/openexr/lib/libOpenEXRCore.dylib"
+          test -f "$SOURCE_DIR/lib/ios_arm64/openexr/lib/libIex.dylib"
+          test -f "$SOURCE_DIR/lib/ios_arm64/openexr/lib/libIlmThread.dylib"
+          test -f "$SOURCE_DIR/lib/ios_arm64/imath/lib/libImath.dylib"
+
+          # The current iOS library bundle contains OpenEXR and Imath but omits
+          # their CMake package metadata. Define the imported target expected by
+          # Blender 5.1.2 using the bundled device libraries.
+          perl -0pi -e '
+            s{^find_package\(OpenEXR REQUIRED\)$}{if(WITH_APPLE_CROSSPLATFORM)
+              add_library(OpenEXR::OpenEXR INTERFACE IMPORTED)
+              set_target_properties(OpenEXR::OpenEXR PROPERTIES
+                INTERFACE_INCLUDE_DIRECTORIES "\${LIBDIR}/openexr/include;\${LIBDIR}/openexr/include/OpenEXR;\${LIBDIR}/imath/include;\${LIBDIR}/imath/include/Imath"
+                INTERFACE_LINK_LIBRARIES "\${LIBDIR}/openexr/lib/libOpenEXR.dylib;\${LIBDIR}/openexr/lib/libOpenEXRCore.dylib;\${LIBDIR}/openexr/lib/libIex.dylib;\${LIBDIR}/openexr/lib/libIlmThread.dylib;\${LIBDIR}/imath/lib/libImath.dylib"
+              )
+              set(OpenEXR_FOUND TRUE)
+              set(OpenEXR_VERSION 3.3.2)
+            else()
+              find_package(OpenEXR REQUIRED)
+            endif()}m
+          ' "$platform_apple_cmake"
+
+          test "$(grep -Fc 'add_library(OpenEXR::OpenEXR INTERFACE IMPORTED)' "$platform_apple_cmake")" -eq 1
+
           cmake -G Xcode \
             -S "$SOURCE_DIR" \
             -B "$BUILD_DIR" \
