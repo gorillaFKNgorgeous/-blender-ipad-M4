@@ -51,6 +51,34 @@ jobs:
       - name: Prepare pinned Blender iOS 5.1.2 source and libraries
         run: bash ./scripts/prepare-source.sh "$SOURCE_DIR"
 
+      - name: Build Blender's bundled Python 3.13 for iOS
+        run: |
+          host_deps_root="$GITHUB_WORKSPACE/work/host-deps"
+          python_deps_build="$GITHUB_WORKSPACE/work/deps-ios-python"
+
+          mkdir -p "$host_deps_root/deps_arm64/Release"
+          ln -s "$SOURCE_DIR/lib/macos_arm64/python" \
+            "$host_deps_root/deps_arm64/Release/python"
+
+          cmake \
+            -S "$SOURCE_DIR/build_files/build_environment" \
+            -B "$python_deps_build" \
+            -DAPPLE_TARGET_DEVICE=ios \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=18.0 \
+            -DCMAKE_DEPS_CROSSCOMPILE_BUILDDIR="$host_deps_root" \
+            -DCMAKE_DEPS_CROSSCOMPILE_INSTALLDIR="$SOURCE_DIR/lib/macos_arm64" \
+            -DHARVEST_TARGET="$SOURCE_DIR/lib/ios_arm64" \
+            -DMAKE_THREADS=3
+
+          cmake --build "$python_deps_build" \
+            --target external_python \
+            --parallel 3
+
+          rsync -a \
+            "$python_deps_build/Release/python/" \
+            "$SOURCE_DIR/lib/ios_arm64/python/"
+
       - name: Verify bundled Python 3.13 dependency layout
         run: |
           test -x "$SOURCE_DIR/lib/macos_arm64/python/bin/python3.13"
