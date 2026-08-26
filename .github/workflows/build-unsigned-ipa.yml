@@ -51,7 +51,18 @@ jobs:
       - name: Prepare pinned Blender iOS 5.1.2 source and libraries
         run: bash ./scripts/prepare-source.sh "$SOURCE_DIR"
 
+      - name: Restore iOS bootstrap dependency cache
+        id: ios-bootstrap-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            work/blender/lib/ios_arm64/python
+            work/blender/lib/ios_arm64/fmt
+            work/blender/lib/ios_arm64/eigen
+          key: ios-bootstrap-${{ runner.os }}-xcode-16.4-${{ env.BLENDER_REF }}-python-3.13.9-fmt-12.1.0-eigen
+
       - name: Install Python dependency build tools
+        if: steps.ios-bootstrap-cache.outputs.cache-hit != 'true'
         run: |
           brew install \
             autoconf \
@@ -69,6 +80,7 @@ jobs:
           echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
 
       - name: Build Blender's bundled Python 3.13 for iOS
+        if: steps.ios-bootstrap-cache.outputs.cache-hit != 'true'
         run: |
           set -o pipefail
 
@@ -148,9 +160,29 @@ jobs:
             "$python_deps_build/Release/fmt/" \
             "$SOURCE_DIR/lib/ios_arm64/fmt/"
 
-          rsync -a \
+          rsync -a --delete \
             "$python_deps_build/Release/eigen/" \
             "$SOURCE_DIR/lib/ios_arm64/eigen/"
+
+      - name: Unify OpenImageIO and Blender fmt headers
+        run: |
+          external_fmt="$SOURCE_DIR/lib/ios_arm64/fmt/include/fmt"
+          oiio_fmt="$SOURCE_DIR/lib/ios_arm64/openimageio/include/OpenImageIO/detail/fmt"
+
+          test -f "$external_fmt/base.h"
+          test -f "$external_fmt/ranges.h"
+          test -f "$SOURCE_DIR/lib/ios_arm64/openimageio/include/OpenImageIO/detail/fmt.h"
+          mkdir -p "$oiio_fmt"
+
+          # The older iOS OpenImageIO bundle internalized fmt 9.1 while
+          # Blender 5.1.2 requires fmt 12.1. Keep one exact header set so
+          # their shared include guards cannot mix incompatible versions.
+          rsync -a --delete "$external_fmt/" "$oiio_fmt/"
+
+          grep -Fq '#define FMT_VERSION 120100' "$external_fmt/base.h"
+          grep -Fq '#define FMT_VERSION 120100' "$oiio_fmt/base.h"
+          cmp "$external_fmt/format.h" "$oiio_fmt/format.h"
+          cmp "$external_fmt/ranges.h" "$oiio_fmt/ranges.h"
 
       - name: Verify bundled Python 3.13 dependency layout
         run: |
@@ -161,6 +193,28 @@ jobs:
           test -f "$SOURCE_DIR/lib/ios_arm64/fmt/lib/libfmt.a"
           test -f "$SOURCE_DIR/lib/ios_arm64/fmt/lib/cmake/fmt/fmt-config.cmake"
           test -f "$SOURCE_DIR/lib/ios_arm64/eigen/share/eigen3/cmake/Eigen3Config.cmake"
+          grep -Fq '#define FMT_VERSION 120100' "$SOURCE_DIR/lib/ios_arm64/fmt/include/fmt/base.h"
+          grep -Fq '#define FMT_VERSION 120100' "$SOURCE_DIR/lib/ios_arm64/openimageio/include/OpenImageIO/detail/fmt/base.h"
+
+      - name: Compile iPhoneOS dependency header probe
+        run: |
+          printf '%s\n' \
+            '#include <OpenImageIO/imageio.h>' \
+            '#include <fmt/ranges.h>' \
+            'int main() { auto value = fmt::format("{}", 1); return value.empty(); }' | \
+          xcrun --sdk iphoneos clang++ \
+            -target arm64-apple-ios18.0 \
+            -std=c++20 \
+            -DIMATH_HALF_NO_LOOKUP_TABLE \
+            -I"$SOURCE_DIR/lib/ios_arm64/openimageio/include" \
+            -I"$SOURCE_DIR/lib/ios_arm64/fmt/include" \
+            -I"$SOURCE_DIR/lib/ios_arm64/imath/include" \
+            -I"$SOURCE_DIR/lib/ios_arm64/imath/include/Imath" \
+            -I"$SOURCE_DIR/lib/ios_arm64/openexr/include" \
+            -I"$SOURCE_DIR/lib/ios_arm64/openexr/include/OpenEXR" \
+            -I"$SOURCE_DIR/lib/ios_arm64/tbb/include" \
+            -fsyntax-only \
+            -x c++ -
 
       - name: Configure Xcode project
         run: |
