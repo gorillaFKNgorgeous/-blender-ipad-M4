@@ -8,6 +8,14 @@ on:
     paths:
       - .github/workflows/build-unsigned-ipa.yml
       - scripts/**
+      - patches/**
+  pull_request:
+    branches:
+      - upgrade/ios-5.1.2
+    paths:
+      - .github/workflows/build-unsigned-ipa.yml
+      - scripts/**
+      - patches/**
   workflow_dispatch:
 
 concurrency:
