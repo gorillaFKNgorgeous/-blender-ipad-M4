@@ -2,6 +2,10 @@
 
 set -Eeuo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+HARNESS_DIR="$(dirname "$SCRIPT_DIR")"
+INPUT_PATCH="$HARNESS_DIR/patches/ios-desktop-input.patch"
+
 SOURCE_DIR="${1:-$PWD/work/blender}"
 UPSTREAM_URL="${BLENDER_UPSTREAM_URL:-https://projects.blender.org/blender/blender.git}"
 IOS_5_1_2_SHA="${IOS_5_1_2_SHA:-a1de44dd54af75a4c8c4a29a5fed2a1334a87446}"
@@ -19,6 +23,11 @@ for command in git git-lfs cmake xcodebuild plutil; do
     exit 1
   fi
 done
+
+if [[ ! -f "$INPUT_PATCH" ]]; then
+  echo "Missing iPadOS desktop input patch: $INPUT_PATCH" >&2
+  exit 1
+fi
 
 if [[ -e "$SOURCE_DIR" ]]; then
   echo "Source destination already exists: $SOURCE_DIR" >&2
@@ -51,6 +60,25 @@ fi
 
 git -C "$SOURCE_DIR" checkout --detach "$actual_blender_ref"
 git -C "$SOURCE_DIR" lfs pull origin
+
+# Add the hardware keyboard and indirect-pointer bridge to the exact pinned
+# 5.1.2 source. Refuse to build if the patch no longer applies cleanly.
+git -C "$SOURCE_DIR" apply --check "$INPUT_PATCH"
+git -C "$SOURCE_DIR" apply "$INPUT_PATCH"
+git -C "$SOURCE_DIR" diff --check
+
+input_system="$SOURCE_DIR/intern/ghost/intern/GHOST_SystemIOS.mm"
+input_window="$SOURCE_DIR/intern/ghost/intern/GHOST_WindowIOS.mm"
+input_plist="$SOURCE_DIR/release/ios/Blender.app/Info.plist"
+
+grep -Fq 'GHOST_SystemIOS::handleKeyEvent(void *eventPtr)' "$input_system"
+grep -Fq 'UIEventButtonMask' "$input_window"
+grep -Fq 'allowedScrollTypesMask = UIScrollTypeMaskAll' "$input_window"
+grep -Fq 'UITouchTypeIndirectPointer' "$input_window"
+grep -Fq 'canBecomeFirstResponder' "$input_window"
+/usr/libexec/PlistBuddy \
+  -c "Print :UIApplicationSupportsIndirectInputEvents" \
+  "$input_plist" | grep -Fxq "true"
 
 (
   cd "$SOURCE_DIR"
@@ -107,3 +135,4 @@ grep -Fq \
 echo "Prepared Blender iOS 5.1.2 source at $SOURCE_DIR"
 echo "Blender revision: $actual_blender_ref"
 echo "Bundle identifier: $BUNDLE_ID"
+echo "Desktop input patch: $(shasum -a 256 "$INPUT_PATCH" | awk '{print $1}')"
