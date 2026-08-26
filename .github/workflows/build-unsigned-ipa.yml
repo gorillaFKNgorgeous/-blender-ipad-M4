@@ -53,13 +53,19 @@ jobs:
 
       - name: Restore iOS bootstrap dependency cache
         id: ios-bootstrap-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: |
             work/blender/lib/ios_arm64/python
+            work/blender/lib/ios_arm64/ssl
+            work/blender/lib/ios_arm64/ffi
+            work/blender/lib/ios_arm64/sqlite
+            work/blender/lib/ios_arm64/zlib
+            work/blender/lib/ios_arm64/bzip2
+            work/blender/lib/ios_arm64/lzma
             work/blender/lib/ios_arm64/fmt
             work/blender/lib/ios_arm64/eigen
-          key: ios-bootstrap-${{ runner.os }}-xcode-16.4-${{ env.BLENDER_REF }}-python-3.13.9-fmt-12.1.0-eigen
+          key: ios-bootstrap-${{ runner.os }}-xcode-16.4-${{ env.BLENDER_REF }}-python-3.13.9-runtime-v1-fmt-12.1.0-eigen
 
       - name: Install Python dependency build tools
         if: steps.ios-bootstrap-cache.outputs.cache-hit != 'true'
@@ -152,17 +158,25 @@ jobs:
             --parallel 3 \
             2>&1 | tee "$GITHUB_WORKSPACE/python-deps-build.log"
 
-          rsync -a \
-            "$python_deps_build/Release/python/" \
-            "$SOURCE_DIR/lib/ios_arm64/python/"
-
-          rsync -a \
-            "$python_deps_build/Release/fmt/" \
-            "$SOURCE_DIR/lib/ios_arm64/fmt/"
-
-          rsync -a --delete \
-            "$python_deps_build/Release/eigen/" \
-            "$SOURCE_DIR/lib/ios_arm64/eigen/"
+          # Install Python and the exact runtime libraries it was compiled
+          # against. Mixing Python 3.13 with the older iOS OpenSSL/libffi
+          # bundle reaches the final link but leaves newer APIs unresolved.
+          for dependency in \
+            python \
+            ssl \
+            ffi \
+            sqlite \
+            zlib \
+            bzip2 \
+            lzma \
+            fmt \
+            eigen
+          do
+            test -d "$python_deps_build/Release/$dependency"
+            rsync -a --delete \
+              "$python_deps_build/Release/$dependency/" \
+              "$SOURCE_DIR/lib/ios_arm64/$dependency/"
+          done
 
       - name: Unify OpenImageIO and Blender fmt headers
         run: |
@@ -193,8 +207,27 @@ jobs:
           test -f "$SOURCE_DIR/lib/ios_arm64/fmt/lib/libfmt.a"
           test -f "$SOURCE_DIR/lib/ios_arm64/fmt/lib/cmake/fmt/fmt-config.cmake"
           test -f "$SOURCE_DIR/lib/ios_arm64/eigen/share/eigen3/cmake/Eigen3Config.cmake"
+          test -f "$SOURCE_DIR/lib/ios_arm64/ssl/lib/libssl.a"
+          test -f "$SOURCE_DIR/lib/ios_arm64/ssl/lib/libcrypto.a"
+          test -f "$SOURCE_DIR/lib/ios_arm64/ffi/lib/libffi.a"
+          test -f "$SOURCE_DIR/lib/ios_arm64/sqlite/lib/libsqlite3.a"
+          test -f "$SOURCE_DIR/lib/ios_arm64/zlib/lib/libz.a"
+          test -f "$SOURCE_DIR/lib/ios_arm64/bzip2/lib/libbz2.a"
+          test -f "$SOURCE_DIR/lib/ios_arm64/lzma/lib/liblzma.a"
           grep -Fq '#define FMT_VERSION 120100' "$SOURCE_DIR/lib/ios_arm64/fmt/include/fmt/base.h"
           grep -Fq '#define FMT_VERSION 120100' "$SOURCE_DIR/lib/ios_arm64/openimageio/include/OpenImageIO/detail/fmt/base.h"
+
+          # These are the four symbols that failed at Blender's final link in
+          # run 16. Checking defined archive symbols here makes the expensive
+          # main compile conditional on a coherent Python runtime bundle.
+          nm -gU "$SOURCE_DIR/lib/ios_arm64/ssl/lib/libcrypto.a" | \
+            grep -Eq '[[:space:]]_EVP_MD_CTX_get_size_ex$'
+          nm -gU "$SOURCE_DIR/lib/ios_arm64/ssl/lib/libssl.a" | \
+            grep -Eq '[[:space:]]_SSL_SESSION_get_time_ex$'
+          nm -gU "$SOURCE_DIR/lib/ios_arm64/ssl/lib/libcrypto.a" | \
+            grep -Eq '[[:space:]]_X509_STORE_get1_objects$'
+          nm -gU "$SOURCE_DIR/lib/ios_arm64/ffi/lib/libffi.a" | \
+            grep -Eq '[[:space:]]_ffi_type_longdouble$'
 
       - name: Compile iPhoneOS dependency header probe
         run: |
@@ -215,6 +248,22 @@ jobs:
             -I"$SOURCE_DIR/lib/ios_arm64/tbb/include" \
             -fsyntax-only \
             -x c++ -
+
+      - name: Save verified iOS bootstrap dependency cache
+        if: steps.ios-bootstrap-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            work/blender/lib/ios_arm64/python
+            work/blender/lib/ios_arm64/ssl
+            work/blender/lib/ios_arm64/ffi
+            work/blender/lib/ios_arm64/sqlite
+            work/blender/lib/ios_arm64/zlib
+            work/blender/lib/ios_arm64/bzip2
+            work/blender/lib/ios_arm64/lzma
+            work/blender/lib/ios_arm64/fmt
+            work/blender/lib/ios_arm64/eigen
+          key: ios-bootstrap-${{ runner.os }}-xcode-16.4-${{ env.BLENDER_REF }}-python-3.13.9-runtime-v1-fmt-12.1.0-eigen
 
       - name: Configure Xcode project
         run: |
