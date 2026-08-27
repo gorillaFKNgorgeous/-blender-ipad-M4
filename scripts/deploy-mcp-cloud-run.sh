@@ -13,7 +13,7 @@ if [[ -z "$PROJECT_ID" || "$PROJECT_ID" == "(unset)" ]]; then
   exit 1
 fi
 
-for command_name in gcloud openssl; do
+for command_name in curl gcloud jq openssl; do
   command -v "$command_name" >/dev/null 2>&1 || {
     echo "Missing required command: $command_name" >&2
     exit 1
@@ -71,6 +71,17 @@ service_url="$(gcloud run services describe "$SERVICE_NAME" \
   --region "$REGION" \
   --format 'value(status.url)')"
 
+health_json="$(curl --fail --silent --show-error "$service_url/healthz")"
+jq -e '.service == "ghostblender-mcp" and .version == "0.1.0"' <<<"$health_json" >/dev/null
+
+mcp_json="$(curl --fail --silent --show-error \
+  --request POST \
+  --header 'accept: application/json, text/event-stream' \
+  --header 'content-type: application/json' \
+  --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"cloud-run-deploy-check","version":"0.1.0"}}}' \
+  "$service_url/mcp/$mcp_path_token")"
+jq -e '.result.serverInfo.name == "ghostblender-ipad"' <<<"$mcp_json" >/dev/null
+
 umask 077
 output_path="$HARNESS_DIR/ghostblender-mcp-connection.txt"
 {
@@ -80,5 +91,6 @@ output_path="$HARNESS_DIR/ghostblender-mcp-connection.txt"
 } > "$output_path"
 
 echo "GhostBlender MCP deployed."
+echo "Health and MCP initialization checks passed."
 echo "Connection details were written to: $output_path"
 echo "Keep that file private; it contains the device token and private MCP capability URL."
