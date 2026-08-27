@@ -1,0 +1,43 @@
+name: Test GhostBlender MCP
+
+on:
+  push:
+    paths:
+      - .github/workflows/test-mcp.yml
+      - blender/**
+      - mcp-server/**
+      - scripts/deploy-mcp-cloud-run.sh
+      - scripts/install-ghostblender-bridge.sh
+  pull_request:
+    paths:
+      - .github/workflows/test-mcp.yml
+      - blender/**
+      - mcp-server/**
+      - scripts/deploy-mcp-cloud-run.sh
+      - scripts/install-ghostblender-bridge.sh
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mcp-server/package-lock.json
+      - name: Install relay dependencies
+        run: npm ci
+        working-directory: mcp-server
+      - name: Test MCP and simulated iPad round trip
+        run: npm test
+        working-directory: mcp-server
+      - name: Check Blender bridge and deployment scripts
+        run: |
+          python3 -m py_compile blender/ghostblender_bridge.py
+          bash -n scripts/deploy-mcp-cloud-run.sh
+          bash -n scripts/install-ghostblender-bridge.sh

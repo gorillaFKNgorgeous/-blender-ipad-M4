@@ -5,6 +5,9 @@ set -Eeuo pipefail
 BUILD_DIR="${1:?Usage: package-ipa.sh BUILD_DIR OUTPUT_IPA}"
 OUTPUT_IPA="${2:?Usage: package-ipa.sh BUILD_DIR OUTPUT_IPA}"
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+bash "$SCRIPT_DIR/install-ghostblender-bridge.sh" "$BUILD_DIR"
+
 app_path=""
 while IFS= read -r candidate; do
   plist="$candidate/Info.plist"
@@ -63,3 +66,4 @@ echo "Bundle identifier: $bundle_id"
 echo "Bundled asset files: $asset_file_count"
 du -sh "$app_path" "$OUTPUT_IPA"
 shasum -a 256 "$OUTPUT_IPA"
+

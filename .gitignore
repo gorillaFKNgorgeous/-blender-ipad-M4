@@ -4,4 +4,6 @@ artifacts/
 *.ipa
 *.xcarchive
 *.log
-
+node_modules/
+ghostblender-mcp-connection.txt
+__pycache__/
