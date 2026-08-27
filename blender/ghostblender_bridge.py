@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 """GhostBlender iPad outbound bridge.
 
 Installed as a Blender startup script. It never listens for inbound network
@@ -352,6 +354,9 @@ class GHOSTBLENDER_OT_connect(bpy.types.Operator):
         if _WORKER is not None and _WORKER.is_alive():
             self.report({"INFO"}, "GhostBlender is already connected")
             return {"FINISHED"}
+        if not bpy.app.online_access:
+            self.report({"ERROR"}, "Enable Online Access in Blender Preferences before connecting")
+            return {"CANCELLED"}
         base_url = context.window_manager.ghostblender_base_url.strip().rstrip("/")
         token = context.window_manager.ghostblender_device_token.strip()
         try:
