@@ -284,7 +284,21 @@ diff --git a/build_files/build_environment/cmake/python.cmake b/build_files/buil
 index 85df4481ec4..11111111111 100644
 --- a/build_files/build_environment/cmake/python.cmake
 +++ b/build_files/build_environment/cmake/python.cmake
-@@ -172,7 +172,8 @@ else()
+@@ -147,7 +147,12 @@
+     if("${CMAKE_OSX_ARCHITECTURES}" STREQUAL "arm64")
+       set(PYTHON_FUNC_CONFIGS ${PYTHON_FUNC_CONFIGS} && export PYTHON_DECIMAL_WITH_MACHINE=ansi64)
+     endif()
+-    set(PYTHON_CONFIGURE_ENV ${CONFIGURE_ENV} && ${PYTHON_FUNC_CONFIGS})
++    if(WITH_APPLE_CROSSPLATFORM)
++      # Python 3.13 probes SDKROOT via xcrun --show-sdk-path (MacOSX). Use iOS sysroot.
++      set(PYTHON_CONFIGURE_ENV ${CONFIGURE_ENV} && export SDKROOT=${CMAKE_OSX_SYSROOT} && ${PYTHON_FUNC_CONFIGS})
++    else()
++      set(PYTHON_CONFIGURE_ENV ${CONFIGURE_ENV} && ${PYTHON_FUNC_CONFIGS})
++    endif()
+   else()
+     set(PYTHON_CONFIGURE_ENV ${CONFIGURE_ENV})
+   endif()
+@@ -172,7 +177,8 @@
    # `ffi`, `sqlite`, `ssl`, `bzip2`, `lzma` and `zlib`.
    # Using pkg-config is only supported for some, and even then we need to work around issues.
    set(PYTHON_CONFIGURE_EXTRA_ARGS --with-openssl=${LIBDIR}/ssl)
@@ -294,7 +308,9 @@ index 85df4481ec4..11111111111 100644
    # Manually specify some library paths. For ffi there is no other way, for sqlite is needed because
    # LIBSQLITE3_LIBS does not work, and ssl because it uses the wrong ssl/lib dir instead of ssl/lib64.
    set(PYTHON_LDFLAGS "-L${LIBDIR}/ffi/lib -L${LIBDIR}/sqlite/lib -L${LIBDIR}/bzip2/lib -L${LIBDIR}/lzma/lib -L${LIBDIR}/zlib/lib -L${LIBDIR}/ssl/lib -L${LIBDIR}/ssl/lib64 -L${LIBDIR}/libb2/lib ${PLATFORM_LDFLAGS}")
-@@ -195,7 +196,7 @@ else()
+@@ -193,9 +199,9 @@
+   endif()
+ 
    set(PYTHON_CONFIGURE_EXTRA_ENV
 -    export CFLAGS=${PYTHON_CFLAGS} &&
 -    export CPPFLAGS=${PYTHON_CFLAGS} &&
@@ -305,11 +321,11 @@ index 85df4481ec4..11111111111 100644
  
      # Use pkg-config for libraries that support it, and ensure that it used static libraries.
      export PKG_CONFIG=pkg-config\ --static
-@@ -229,7 +230,9 @@ else()
-       export LIBSQLITE3_CFLAGS=-I${LIBDIR}/sqlite/include
+@@ -230,6 +236,9 @@
        export LIBSQLITE3_LIBS=${LIBDIR}/sqlite/lib/${LIBPREFIX}sqlite3${LIBEXT}
        export ZLIB_CFLAGS=-I${LIBDIR}/zlib/include
        export ZLIB_LIBS=${LIBDIR}/zlib/lib/${ZLIB_LIBRARY}
++      && export SDKROOT=${CMAKE_OSX_SYSROOT}
 +    )
 +  endif()
  

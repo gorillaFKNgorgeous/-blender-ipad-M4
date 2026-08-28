@@ -1,6 +1,5 @@
-diff -Naur a/Modules/Setup b/Modules/Setup
---- a/Modules/Setup	2026-08-28 21:04:51.200153753 +0000
-+++ b/Modules/Setup	2026-08-28 21:05:30.548041409 +0000
+--- a/Modules/Setup	2026-08-28 22:08:51.718745566 +0000
++++ b/Modules/Setup	2026-08-28 22:08:51.738745498 +0000
 @@ -130,85 +130,92 @@
  
  # Modules that should always be present (POSIX and Windows):
@@ -162,9 +161,8 @@ diff -Naur a/Modules/Setup b/Modules/Setup
  
  # Examples
  
-diff -Naur a/Modules/Setup.stdlib.in b/Modules/Setup.stdlib.in
---- a/Modules/Setup.stdlib.in	2026-08-28 21:04:51.216153709 +0000
-+++ b/Modules/Setup.stdlib.in	2026-08-28 21:05:30.548041409 +0000
+--- a/Modules/Setup.stdlib.in	2026-08-28 22:08:51.722745552 +0000
++++ b/Modules/Setup.stdlib.in	2026-08-28 22:08:51.738745498 +0000
 @@ -23,7 +23,8 @@
  
  # Build modules statically or as shared extensions
@@ -175,9 +173,8 @@ diff -Naur a/Modules/Setup.stdlib.in b/Modules/Setup.stdlib.in
  
  
  ############################################################################
-diff -Naur a/Modules/_scproxy.c b/Modules/_scproxy.c
---- a/Modules/_scproxy.c	2026-08-28 21:04:51.208153731 +0000
-+++ b/Modules/_scproxy.c	2026-08-28 21:05:30.548041409 +0000
+--- a/Modules/_scproxy.c	2026-08-28 22:08:51.722745552 +0000
++++ b/Modules/_scproxy.c	2026-08-28 22:08:51.738745498 +0000
 @@ -60,6 +60,9 @@
  static PyObject*
  get_proxy_settings(PyObject* Py_UNUSED(mod), PyObject *Py_UNUSED(ignored))
@@ -214,9 +211,8 @@ diff -Naur a/Modules/_scproxy.c b/Modules/_scproxy.c
  }
  
  static PyMethodDef mod_methods[] = {
-diff -Naur a/Modules/posixmodule.c b/Modules/posixmodule.c
---- a/Modules/posixmodule.c	2026-08-28 21:04:51.192153777 +0000
-+++ b/Modules/posixmodule.c	2026-08-28 21:05:30.540041431 +0000
+--- a/Modules/posixmodule.c	2026-08-28 22:08:51.726745539 +0000
++++ b/Modules/posixmodule.c	2026-08-28 22:08:51.742745485 +0000
 @@ -56,6 +56,7 @@
   /* Needed for the implementation of os.statvfs */
  #  include <sys/param.h>
@@ -275,9 +271,8 @@ diff -Naur a/Modules/posixmodule.c b/Modules/posixmodule.c
                  mknodat_unavailable = 1;
                  result = 0;
              }
-diff -Naur a/configure b/configure
---- a/configure	2026-08-28 21:04:51.188153787 +0000
-+++ b/configure	2026-08-28 21:05:30.544041420 +0000
+--- a/configure	2026-08-28 22:08:51.714745580 +0000
++++ b/configure	2026-08-28 22:09:01.058713989 +0000
 @@ -1131,6 +1131,7 @@
  with_ssl_default_suites
  with_builtin_hashlib_hashes
@@ -286,34 +281,23 @@ diff -Naur a/configure b/configure
  '
        ac_precious_vars='build_alias
  host_alias
-@@ -1648,6 +1649,26 @@
+@@ -1648,6 +1649,15 @@
    fi
  fi
  
-+# Force enable cross-compilation to take crosscompile path even if host and build are the same.
-+{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for --with-force-crosscompile" >&5
-+printf %s "checking for --with-force-crosscompile... " >&6; }
-+
-+if test "${with_force_crosscompile+y}"
-+then :
-+  withval=$with_force_crosscompile
-+else
-+  withval="no"
-+fi
-+
-+if test "$withval" != no; then
-+  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: yes" >&5
-+printf "%s\n" "yes" >&6; }
-+  cross_compiling=yes
-+else
-+  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: result: no" >&5
-+printf "%s\n" "no" >&6; }
++# Force enable cross-compilation even if host and build are the same.
++# Silent like the host_alias cross_compiling assignment above: config.log
++# (fd 5) is not opened until `exec 5>>config.log` later in this script.
++if test "${with_force_crosscompile+y}"; then
++  if test "$with_force_crosscompile" != no; then
++    cross_compiling=yes
++  fi
 +fi
 +
  ac_tool_prefix=
  test -n "$host_alias" && ac_tool_prefix=$host_alias-
  
-@@ -4067,6 +4088,9 @@
+@@ -4067,6 +4077,9 @@
  	*-*-wasi*)
  	    ac_sys_system=WASI
  	    ;;
@@ -323,7 +307,7 @@ diff -Naur a/configure b/configure
  	*)
  		# for now, limit cross builds to known configurations
  		MACHDEP="unknown"
-@@ -4531,6 +4555,10 @@
+@@ -4531,6 +4544,10 @@
  	wasm32-*-* | wasm64-*-*)
  		_host_ident=$host_cpu
  		;;
@@ -334,7 +318,7 @@ diff -Naur a/configure b/configure
  	*)
  		# for now, limit cross builds to known configurations
  		MACHDEP="unknown"
-@@ -10242,6 +10270,11 @@
+@@ -10242,6 +10259,11 @@
  	    ;;
  
      Darwin*)
@@ -346,7 +330,7 @@ diff -Naur a/configure b/configure
          # -Wno-long-double, -no-cpp-precomp, and -mno-fused-madd
          # used to be here, but non-Apple gcc doesn't accept them.
          if test "${CC}" = gcc
-@@ -29116,6 +29149,11 @@
+@@ -29116,6 +29138,11 @@
      MODULE_BUILDTYPE=${MODULE_BUILDTYPE:-shared}
   ;;
  esac
