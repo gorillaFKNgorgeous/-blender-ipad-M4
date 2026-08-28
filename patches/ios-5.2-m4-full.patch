@@ -330,15 +330,6 @@ index e371d934de2..11111111111 100644
    ExternalProject_Add(external_sqlite
      URL file://${PACKAGE_DIR}/${SQLITE_FILE}
      DOWNLOAD_DIR ${DOWNLOAD_DIR}
-@@ -84,7 +109,7 @@
- 
-     CONFIGURE_COMMAND ${SQLITE_CONFIGURE_ENV} &&
-       cd ${BUILD_DIR}/sqlite/src/external_sqlite/ &&
--      ${CONFIGURE_COMMAND} --prefix=${LIBDIR}/sqlite ${SQLITE_CONFIGURATION_ARGS}
-+      ${CONFIGURE_COMMAND} --prefix=${LIBDIR}/sqlite ${SQLITE_CONFIGURATION_ARGS} ${CROSS_COMPILE_FLAGS}
- 
-     BUILD_COMMAND ${CONFIGURE_ENV} &&
-       cd ${BUILD_DIR}/sqlite/src/external_sqlite/ &&
 @@ -98,27 +123,6 @@
    )
  endif()
@@ -388,9 +379,9 @@ index 67f848260e7..11111111111 100644
  
  ExternalProject_Add(external_ffi
    URL file://${PACKAGE_DIR}/${FFI_FILE}
-@@ -73,13 +81,7 @@
+@@ -73,13 +81,6 @@
      ${FFI_INSTALL}
-     make install
+-    make install
  
 -  PATCH_COMMAND ${PATCH_CMD} -p 0 -d
 -    ${BUILD_DIR}/ffi/src/external_ffi <
