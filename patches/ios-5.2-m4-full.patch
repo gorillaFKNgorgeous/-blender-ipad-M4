@@ -294,3 +294,76 @@ index 85df4481ec4..11111111111 100644
  
    # This patch includes changes to fix missing `-lm` for SQLITE
    # and fix the order of `-ldl` flags for SSL to avoid link errors.
+diff --git a/build_files/build_environment/cmake/sqlite.cmake b/build_files/build_environment/cmake/sqlite.cmake
+index e371d934de2..11111111111 100644
+--- a/build_files/build_environment/cmake/sqlite.cmake
++++ b/build_files/build_environment/cmake/sqlite.cmake
+@@ -76,6 +76,31 @@
+     --enable-fts5
+     --disable-shared
+   )
++  if(NOT WITH_APPLE_CROSSPLATFORM)
++    ExternalProject_Add(external_sqlite
++      URL file://${PACKAGE_DIR}/${SQLITE_FILE}
++      DOWNLOAD_DIR ${DOWNLOAD_DIR}
++      URL_HASH ${SQLITE_HASH_TYPE}=${SQLITE_HASH}
++      PREFIX ${BUILD_DIR}/sqlite
++
++      CONFIGURE_COMMAND ${SQLITE_CONFIGURE_ENV} &&
++        cd ${BUILD_DIR}/sqlite/src/external_sqlite/ &&
++        ${CONFIGURE_COMMAND} --prefix=${LIBDIR}/sqlite ${SQLITE_CONFIGURATION_ARGS}
++
++      BUILD_COMMAND ${CONFIGURE_ENV} &&
++        cd ${BUILD_DIR}/sqlite/src/external_sqlite/ &&
++        make -j${MAKE_THREADS}
++
++      INSTALL_COMMAND ${CONFIGURE_ENV} &&
++        cd ${BUILD_DIR}/sqlite/src/external_sqlite/ &&
++        make install
++
++      INSTALL_DIR ${LIBDIR}/sqlite
++    )
++  endif()
++endif()
++
++if(WITH_APPLE_CROSSPLATFORM)
+   ExternalProject_Add(external_sqlite
+     URL file://${PACKAGE_DIR}/${SQLITE_FILE}
+     DOWNLOAD_DIR ${DOWNLOAD_DIR}
+@@ -84,7 +109,7 @@
+ 
+     CONFIGURE_COMMAND ${SQLITE_CONFIGURE_ENV} &&
+       cd ${BUILD_DIR}/sqlite/src/external_sqlite/ &&
+-      ${CONFIGURE_COMMAND} --prefix=${LIBDIR}/sqlite ${SQLITE_CONFIGURATION_ARGS}
++      ${CONFIGURE_COMMAND} --prefix=${LIBDIR}/sqlite ${SQLITE_CONFIGURATION_ARGS} ${CROSS_COMPILE_FLAGS}
+ 
+     BUILD_COMMAND ${CONFIGURE_ENV} &&
+       cd ${BUILD_DIR}/sqlite/src/external_sqlite/ &&
+@@ -98,27 +123,6 @@
+   )
+ endif()
+ 
+-ExternalProject_Add(external_sqlite
+-  URL file://${PACKAGE_DIR}/${SQLITE_FILE}
+-  DOWNLOAD_DIR ${DOWNLOAD_DIR}
+-  URL_HASH ${SQLITE_HASH_TYPE}=${SQLITE_HASH}
+-  PREFIX ${BUILD_DIR}/sqlite
+-
+-  CONFIGURE_COMMAND ${SQLITE_CONFIGURE_ENV} &&
+-    cd ${BUILD_DIR}/sqlite/src/external_sqlite/ &&
+-    ${CONFIGURE_COMMAND} --prefix=${LIBDIR}/sqlite ${SQLITE_CONFIGURATION_ARGS} ${CROSS_COMPILE_FLAGS}
+-
+-  BUILD_COMMAND ${CONFIGURE_ENV} &&
+-    cd ${BUILD_DIR}/sqlite/src/external_sqlite/ &&
+-    make -j${MAKE_THREADS}
+-
+-  INSTALL_COMMAND ${CONFIGURE_ENV} &&
+-    cd ${BUILD_DIR}/sqlite/src/external_sqlite/ &&
+-    make install
+-
+-  INSTALL_DIR ${LIBDIR}/sqlite
+-)
+-
+ if(WITH_APPLE_CROSSPLATFORM)
+   # Required to provide libs for IOS_PYTHON_STATIC_LIBS
+   harvest_rpath_lib(external_sqlite sqlite/lib sqlite/lib "*.a")
