@@ -367,3 +367,39 @@ index e371d934de2..11111111111 100644
  if(WITH_APPLE_CROSSPLATFORM)
    # Required to provide libs for IOS_PYTHON_STATIC_LIBS
    harvest_rpath_lib(external_sqlite sqlite/lib sqlite/lib "*.a")
+diff --git a/build_files/build_environment/cmake/ffi.cmake b/build_files/build_environment/cmake/ffi.cmake
+index 67f848260e7..11111111111 100644
+--- a/build_files/build_environment/cmake/ffi.cmake
++++ b/build_files/build_environment/cmake/ffi.cmake
+@@ -49,7 +49,15 @@
+ else()
+   set(CROSS_COMPILE_FLAGS)
+ endif()
+-set(FFI_PATCH_FILE ${PATCH_DIR}/ffi.diff)
++# ffi.diff / ffi_apple_clang_17.diff are referenced by upstream ffi.cmake but are not
++# present in this 5.2 iOS tree. libffi 3.5.2 supersedes the Clang 17 workaround.
++set(FFI_PATCH_COMMAND ${CMAKE_COMMAND} -E echo "Skipping missing ffi.diff patches")
++if(EXISTS "${PATCH_DIR}/ffi.diff")
++  set(FFI_PATCH_COMMAND ${PATCH_CMD} -p 0 -d ${BUILD_DIR}/ffi/src/external_ffi < ${PATCH_DIR}/ffi.diff)
++endif()
++if(EXISTS "${PATCH_DIR}/ffi_apple_clang_17.diff")
++  set(FFI_PATCH_COMMAND ${FFI_PATCH_COMMAND} && ${PATCH_CMD} -p 1 -d ${BUILD_DIR}/ffi/src/external_ffi < ${PATCH_DIR}/ffi_apple_clang_17.diff)
++endif()
+ 
+ ExternalProject_Add(external_ffi
+   URL file://${PACKAGE_DIR}/${FFI_FILE}
+@@ -73,13 +81,7 @@
+     ${FFI_INSTALL}
+     make install
+ 
+-  PATCH_COMMAND ${PATCH_CMD} -p 0 -d
+-    ${BUILD_DIR}/ffi/src/external_ffi <
+-    ${FFI_PATCH_FILE} &&
+-    # Fix compilation errors on Apple Clang >= 17, remove when FFI is updated beyond 3.4.7, see PR #136934 for details.
+-    ${PATCH_CMD} -p 1 -d
+-    ${BUILD_DIR}/ffi/src/external_ffi <
+-    ${PATCH_DIR}/ffi_apple_clang_17.diff
++  PATCH_COMMAND ${FFI_PATCH_COMMAND}
+ 
+   INSTALL_DIR ${LIBDIR}/ffi
+ )
