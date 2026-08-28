@@ -1,3 +1,15 @@
+diff --git a/build_files/build_environment/cmake/options.cmake b/build_files/build_environment/cmake/options.cmake
+index d2a5ce53c22..846a36f854a 100644
+--- a/build_files/build_environment/cmake/options.cmake
++++ b/build_files/build_environment/cmake/options.cmake
+@@ -246,6 +246,7 @@ else()
+     set(PLATFORM_LDFLAGS "-isysroot ${CMAKE_OSX_SYSROOT} -mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET} -arch ${CMAKE_OSX_ARCHITECTURES} -headerpad_max_install_names")
+     if("${CMAKE_OSX_ARCHITECTURES}" STREQUAL "x86_64")
+       set(PLATFORM_BUILD_TARGET --build=x86_64-apple-darwin19.0.0) # OS X 10.15
++    endif()
+     if(WITH_APPLE_CROSSPLATFORM)
+       # All Apple platform-specific settings - some may be redundant.
+       set (CMAKE_SHARED_LIBRARY_PREFIX "lib")
 diff --git a/build_files/cmake/platform/platform_apple.cmake b/build_files/cmake/platform/platform_apple.cmake
 index bdf0202c207e28883d2aa9686675ffa033bdc1e2..dc0480798375d987c326036334ce21b4e53e23fd 100644
 --- a/build_files/cmake/platform/platform_apple.cmake
@@ -268,4 +280,3 @@ index 200f3c5b19903d8d4319a70ea28840d684c3f72f..c05dea8ac700cda3aa10ed29bf2af4f3
  #else
    /* Compile shaders on performance cores but leave one free so UI is still responsive.
     * Also respect command line option to reduce number of threads. */
-
