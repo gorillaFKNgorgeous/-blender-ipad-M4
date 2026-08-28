@@ -281,15 +281,16 @@ index 200f3c5b19903d8d4319a70ea28840d684c3f72f..c05dea8ac700cda3aa10ed29bf2af4f3
    /* Compile shaders on performance cores but leave one free so UI is still responsive.
     * Also respect command line option to reduce number of threads. */
 diff --git a/build_files/build_environment/cmake/python.cmake b/build_files/build_environment/cmake/python.cmake
-index 85df4481ec4..cb5691c8019 100644
+index 85df4481ec4..11111111111 100644
 --- a/build_files/build_environment/cmake/python.cmake
 +++ b/build_files/build_environment/cmake/python.cmake
-@@ -229,7 +229,8 @@ else()
+@@ -229,7 +229,9 @@ else()
        export LIBSQLITE3_CFLAGS=-I${LIBDIR}/sqlite/include
        export LIBSQLITE3_LIBS=${LIBDIR}/sqlite/lib/${LIBPREFIX}sqlite3${LIBEXT}
        export ZLIB_CFLAGS=-I${LIBDIR}/zlib/include
        export ZLIB_LIBS=${LIBDIR}/zlib/lib/${ZLIB_LIBRARY}
 +    )
++  endif()
  
    # This patch includes changes to fix missing `-lm` for SQLITE
    # and fix the order of `-ldl` flags for SSL to avoid link errors.
