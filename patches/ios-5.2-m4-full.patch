@@ -284,7 +284,28 @@ diff --git a/build_files/build_environment/cmake/python.cmake b/build_files/buil
 index 85df4481ec4..11111111111 100644
 --- a/build_files/build_environment/cmake/python.cmake
 +++ b/build_files/build_environment/cmake/python.cmake
-@@ -229,7 +229,9 @@ else()
+@@ -172,7 +172,8 @@ else()
+   # `ffi`, `sqlite`, `ssl`, `bzip2`, `lzma` and `zlib`.
+   # Using pkg-config is only supported for some, and even then we need to work around issues.
+   set(PYTHON_CONFIGURE_EXTRA_ARGS --with-openssl=${LIBDIR}/ssl)
+-  set(PYTHON_CFLAGS "-I${LIBDIR}/sqlite/include -I${LIBDIR}/bzip2/include -I${LIBDIR}/lzma/include -I${LIBDIR}/zlib/include -I${LIBDIR}/libb2/include ${PLATFORM_CFLAGS} ${PYTHON_IOS_CFLAGS}")
++  # Prefer built libffi 3.5.2 headers over MacOSX.sdk ffi.h (unavailable on iOS).
++  set(PYTHON_CFLAGS "-I${LIBDIR}/ffi/include -I${LIBDIR}/sqlite/include -I${LIBDIR}/bzip2/include -I${LIBDIR}/lzma/include -I${LIBDIR}/zlib/include -I${LIBDIR}/libb2/include ${PLATFORM_CFLAGS} ${PYTHON_IOS_CFLAGS}")
+   # Manually specify some library paths. For ffi there is no other way, for sqlite is needed because
+   # LIBSQLITE3_LIBS does not work, and ssl because it uses the wrong ssl/lib dir instead of ssl/lib64.
+   set(PYTHON_LDFLAGS "-L${LIBDIR}/ffi/lib -L${LIBDIR}/sqlite/lib -L${LIBDIR}/bzip2/lib -L${LIBDIR}/lzma/lib -L${LIBDIR}/zlib/lib -L${LIBDIR}/ssl/lib -L${LIBDIR}/ssl/lib64 -L${LIBDIR}/libb2/lib ${PLATFORM_LDFLAGS}")
+@@ -195,7 +196,7 @@ else()
+   set(PYTHON_CONFIGURE_EXTRA_ENV
+-    export CFLAGS=${PYTHON_CFLAGS} &&
+-    export CPPFLAGS=${PYTHON_CFLAGS} &&
+-    export LDFLAGS=${PYTHON_LDFLAGS} &&
++    export CFLAGS=\"${PYTHON_CFLAGS}\" &&
++    export CPPFLAGS=\"${PYTHON_CFLAGS}\" &&
++    export LDFLAGS=\"${PYTHON_LDFLAGS}\" &&
+ 
+     # Use pkg-config for libraries that support it, and ensure that it used static libraries.
+     export PKG_CONFIG=pkg-config\ --static
+@@ -229,7 +230,9 @@ else()
        export LIBSQLITE3_CFLAGS=-I${LIBDIR}/sqlite/include
        export LIBSQLITE3_LIBS=${LIBDIR}/sqlite/lib/${LIBPREFIX}sqlite3${LIBEXT}
        export ZLIB_CFLAGS=-I${LIBDIR}/zlib/include
