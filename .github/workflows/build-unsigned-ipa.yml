@@ -1,25 +1,26 @@
-name: Build unsigned Blender 5.1.2 iPad IPA
+name: Build full Blender 5.2 iPad M4 IPA
 
 on:
   push:
     branches:
-      - main
-      - upgrade/ios-5.1.2
+      - upgrade/ios-5.2-m4-full
     paths:
       - .github/workflows/build-unsigned-ipa.yml
       - scripts/**
       - patches/**
+      - README.md
   pull_request:
     branches:
-      - upgrade/ios-5.1.2
+      - upgrade/ios-5.2-m4-full
     paths:
       - .github/workflows/build-unsigned-ipa.yml
       - scripts/**
       - patches/**
+      - README.md
   workflow_dispatch:
 
 concurrency:
-  group: blender-ipad-m4-${{ github.ref }}
+  group: blender-5.2-ipad-m4-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -27,13 +28,13 @@ permissions:
 
 jobs:
   build:
-    name: Blender 5.1.2 iPad M4 bring-up
+    name: Blender 5.2 LTS / iPadOS 27 / M4 full profile
     runs-on: macos-15
-    timeout-minutes: 240
+    timeout-minutes: 360
 
     env:
-      BLENDER_REF: a1de44dd54af75a4c8c4a29a5fed2a1334a87446
-      BUNDLE_ID: com.gorillafkngorgeous.blenderipad
+      BLENDER_REF: 2bc556e58e82eb3a801895f2cb1881c0267e5cd5
+      BUNDLE_ID: com.gorillafkngorgeous.blenderipad52
       SOURCE_DIR: ${{ github.workspace }}/work/blender
       BUILD_DIR: ${{ github.workspace }}/work/build-ios
       ARTIFACT_DIR: ${{ github.workspace }}/artifacts
@@ -42,24 +43,27 @@ jobs:
       - name: Check out build harness
         uses: actions/checkout@v4
 
-      - name: Select Xcode 16.4
+      - name: Select Xcode 26.3 and iOS 26 SDK
         run: |
-          sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
+          sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
           xcodebuild -version
+          test "$(xcodebuild -version | awk '/Xcode/{print $2}' | cut -d. -f1)" -ge 26
           xcrun --sdk iphoneos --show-sdk-version
+          xcrun --sdk iphoneos --show-sdk-path
 
-      - name: Check host tools and capacity
+      - name: Check Apple-silicon host tools and capacity
         run: |
+          test "$(uname -m)" = arm64
           uname -a
-          uname -m
           cmake --version
           git lfs version
+          sysctl -n hw.ncpu
           df -h
 
-      - name: Prepare pinned Blender iOS 5.1.2 source and libraries
+      - name: Prepare pinned Blender 5.2 iOS source and libraries
         run: bash ./scripts/prepare-source.sh "$SOURCE_DIR"
 
-      - name: Restore iOS bootstrap dependency cache
+      - name: Restore Python 3.13 and codec dependency cache
         id: ios-bootstrap-cache
         uses: actions/cache/restore@v4
         with:
@@ -71,11 +75,12 @@ jobs:
             work/blender/lib/ios_arm64/zlib
             work/blender/lib/ios_arm64/bzip2
             work/blender/lib/ios_arm64/lzma
-            work/blender/lib/ios_arm64/fmt
-            work/blender/lib/ios_arm64/eigen
-          key: ios-bootstrap-${{ runner.os }}-xcode-16.4-${{ env.BLENDER_REF }}-python-3.13.9-runtime-v1-fmt-12.1.0-eigen
+            work/blender/lib/ios_arm64/libb2
+            work/blender/lib/ios_arm64/draco
+            work/blender/lib/ios_arm64/meshoptimizer
+          key: ios-5.2-bootstrap-${{ runner.os }}-xcode-26.3-${{ env.BLENDER_REF }}-python-3.13.13-draco-meshopt-v1
 
-      - name: Install Python dependency build tools
+      - name: Install dependency build tools
         if: steps.ios-bootstrap-cache.outputs.cache-hit != 'true'
         run: |
           brew install \
@@ -93,82 +98,50 @@ jobs:
           echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
 
-      - name: Build Blender's bundled Python 3.13 for iOS
+      - name: Build iOS Python 3.13, Draco, and Meshoptimizer
         if: steps.ios-bootstrap-cache.outputs.cache-hit != 'true'
         run: |
           set -o pipefail
 
           host_deps_root="$GITHUB_WORKSPACE/work/host-deps"
-          python_deps_build="$GITHUB_WORKSPACE/work/deps-ios-python"
+          deps_build="$GITHUB_WORKSPACE/work/deps-ios-bootstrap"
           download_cmake="$SOURCE_DIR/build_files/build_environment/cmake/download.cmake"
           dependency_cmakelists="$SOURCE_DIR/build_files/build_environment/CMakeLists.txt"
-          python_cmake="$SOURCE_DIR/build_files/build_environment/cmake/python.cmake"
-          eigen_cmake="$SOURCE_DIR/build_files/build_environment/cmake/eigen.cmake"
 
           mkdir -p "$host_deps_root/deps_arm64/Release"
           ln -s "$SOURCE_DIR/lib/macos_arm64/python" \
             "$host_deps_root/deps_arm64/Release/python"
-          mkdir -p \
-            "$host_deps_root/deps_arm64/Release/python/lib/python3.13"
 
-          # Blender 5.1.2 hard-codes the pre-install CPython build directory for
-          # its iOS sysconfig copy. Python 3.13.9 reliably installs that file
-          # before this after_install step, so copy from the installed tree.
+          # The dependency project normally downloads and configures every desktop package.
+          # Limit this bootstrap to the exact missing iOS capabilities and Python's direct libs.
           perl -0pi -e '
-            s{\$\{BUILD_DIR\}/python/src/external_python/build/lib\.darwin-3\.13/}{\$\{LIBDIR\}/python/lib/python3.13/}g
-          ' "$python_cmake"
-
-          test "$(grep -Fc '${LIBDIR}/python/lib/python3.13/' "$python_cmake")" -eq 1
-
-          # Blender's dependency configure normally downloads every supported
-          # package before any target is selected. Retain Python and its direct
-          # libraries plus fmt and Eigen, which Blender 5.1.2 requires but the
-          # current iOS dependency bundle does not contain.
-          perl -0pi -e '
-            s/^download_source\((?!ZLIB\)|PYTHON\)|BZIP2\)|FFI\)|LZMA\)|SSL\)|SQLITE\)|FMT\)|EIGEN\))([A-Z0-9_]+)\)$/# Focused iOS bootstrap skips $1/mg
+            s/^download_source\((?!ZLIB\)|PYTHON\)|LIBB2\)|BZIP2\)|FFI\)|LZMA\)|SSL\)|SQLITE\)|DRACO\)|MESHOPTIMIZER\))([A-Z0-9_]+)\)$/# Focused iOS bootstrap skips $1/mg
           ' "$download_cmake"
+          test "$(grep -c '^download_source(' "$download_cmake")" -eq 10
 
-          test "$(grep -c '^download_source(' "$download_cmake")" -eq 9
-
-          # CMake also configures every dependency file even when only the
-          # external_python target is requested. Keep the dependency project
-          # limited to Python and its direct libraries so unrelated packages
-          # cannot require missing host tools such as ISPC.
           perl -0pi -e '
-            s{^(\s*)include\(cmake/([^)]+)\)$}{$1# Python-only iOS bootstrap skips cmake/$2}mg;
-            s{^(\s*)# Python-only iOS bootstrap skips cmake/(check_software|options|versions|download|macros|check_compilers|harvest|ssl|zlib|python|ffi|sqlite|bzip2|lzma|fmt|eigen)\.cmake$}{$1include(cmake/$2.cmake)}mg
+            s{^(\s*)include\(cmake/([^)]+)\)$}{$1# Focused iOS bootstrap skips cmake/$2}mg;
+            s{^(\s*)# Focused iOS bootstrap skips cmake/(check_software|options|versions|download|macros|check_compilers|harvest|ssl|zlib|python|libb2|ffi|sqlite|bzip2|lzma|draco|meshoptimizer)\.cmake$}{$1include(cmake/$2.cmake)}mg
           ' "$dependency_cmakelists"
-
-          test "$(grep -c '^[[:space:]]*include(cmake/' "$dependency_cmakelists")" -eq 16
-
-          # Eigen is header-only here; point its optional TBB discovery at the
-          # already bundled iOS TBB package instead of this focused build tree.
-          perl -0pi -e '
-            s{\$\{LIBDIR\}/tbb/lib/cmake/TBB}{\$\{HARVEST_TARGET\}/tbb/lib/cmake/TBB}g
-          ' "$eigen_cmake"
-
-          test "$(grep -Fc '${HARVEST_TARGET}/tbb/lib/cmake/TBB' "$eigen_cmake")" -eq 1
+          test "$(grep -c '^[[:space:]]*include(cmake/' "$dependency_cmakelists")" -eq 17
 
           cmake \
             -S "$SOURCE_DIR/build_files/build_environment" \
-            -B "$python_deps_build" \
+            -B "$deps_build" \
             -DAPPLE_TARGET_DEVICE=ios \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=18.0 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0 \
             -DCMAKE_DEPS_CROSSCOMPILE_BUILDDIR="$host_deps_root" \
             -DCMAKE_DEPS_CROSSCOMPILE_INSTALLDIR="$SOURCE_DIR/lib/macos_arm64" \
             -DHARVEST_TARGET="$SOURCE_DIR/lib/ios_arm64" \
             -DMAKE_THREADS=3 \
-            2>&1 | tee "$GITHUB_WORKSPACE/python-deps-configure.log"
+            2>&1 | tee "$GITHUB_WORKSPACE/bootstrap-configure.log"
 
-          cmake --build "$python_deps_build" \
-            --target external_python external_fmt external_eigen \
+          cmake --build "$deps_build" \
+            --target external_python external_draco external_meshoptimizer \
             --parallel 3 \
-            2>&1 | tee "$GITHUB_WORKSPACE/python-deps-build.log"
+            2>&1 | tee "$GITHUB_WORKSPACE/bootstrap-build.log"
 
-          # Install Python and the exact runtime libraries it was compiled
-          # against. Mixing Python 3.13 with the older iOS OpenSSL/libffi
-          # bundle reaches the final link but leaves newer APIs unresolved.
           for dependency in \
             python \
             ssl \
@@ -177,44 +150,24 @@ jobs:
             zlib \
             bzip2 \
             lzma \
-            fmt \
-            eigen
+            libb2 \
+            draco \
+            meshoptimizer
           do
-            test -d "$python_deps_build/Release/$dependency"
+            test -d "$deps_build/Release/$dependency"
             rsync -a --delete \
-              "$python_deps_build/Release/$dependency/" \
+              "$deps_build/Release/$dependency/" \
               "$SOURCE_DIR/lib/ios_arm64/$dependency/"
           done
 
-      - name: Unify OpenImageIO and Blender fmt headers
-        run: |
-          external_fmt="$SOURCE_DIR/lib/ios_arm64/fmt/include/fmt"
-          oiio_fmt="$SOURCE_DIR/lib/ios_arm64/openimageio/include/OpenImageIO/detail/fmt"
-
-          test -f "$external_fmt/base.h"
-          test -f "$external_fmt/ranges.h"
-          test -f "$SOURCE_DIR/lib/ios_arm64/openimageio/include/OpenImageIO/detail/fmt.h"
-          mkdir -p "$oiio_fmt"
-
-          # The older iOS OpenImageIO bundle internalized fmt 9.1 while
-          # Blender 5.1.2 requires fmt 12.1. Keep one exact header set so
-          # their shared include guards cannot mix incompatible versions.
-          rsync -a --delete "$external_fmt/" "$oiio_fmt/"
-
-          grep -Fq '#define FMT_VERSION 120100' "$external_fmt/base.h"
-          grep -Fq '#define FMT_VERSION 120100' "$oiio_fmt/base.h"
-          cmp "$external_fmt/format.h" "$oiio_fmt/format.h"
-          cmp "$external_fmt/ranges.h" "$oiio_fmt/ranges.h"
-
-      - name: Verify bundled Python 3.13 dependency layout
+      - name: Verify complete iOS dependency layout
         run: |
           test -x "$SOURCE_DIR/lib/macos_arm64/python/bin/python3.13"
           test -f "$SOURCE_DIR/lib/ios_arm64/python/include/python3.13/Python.h"
           test -f "$SOURCE_DIR/lib/ios_arm64/python/include/python3.13/pyconfig.h"
           test -f "$SOURCE_DIR/lib/ios_arm64/python/lib/libpython3.13.a"
-          test -f "$SOURCE_DIR/lib/ios_arm64/fmt/lib/libfmt.a"
-          test -f "$SOURCE_DIR/lib/ios_arm64/fmt/lib/cmake/fmt/fmt-config.cmake"
-          test -f "$SOURCE_DIR/lib/ios_arm64/eigen/share/eigen3/cmake/Eigen3Config.cmake"
+          test -d "$SOURCE_DIR/lib/ios_arm64/python/lib/python3.13"
+          test ! -f "$SOURCE_DIR/lib/ios_arm64/python/lib/libpython3.11.a"
           test -f "$SOURCE_DIR/lib/ios_arm64/ssl/lib/libssl.a"
           test -f "$SOURCE_DIR/lib/ios_arm64/ssl/lib/libcrypto.a"
           test -f "$SOURCE_DIR/lib/ios_arm64/ffi/lib/libffi.a"
@@ -222,12 +175,13 @@ jobs:
           test -f "$SOURCE_DIR/lib/ios_arm64/zlib/lib/libz.a"
           test -f "$SOURCE_DIR/lib/ios_arm64/bzip2/lib/libbz2.a"
           test -f "$SOURCE_DIR/lib/ios_arm64/lzma/lib/liblzma.a"
-          grep -Fq '#define FMT_VERSION 120100' "$SOURCE_DIR/lib/ios_arm64/fmt/include/fmt/base.h"
-          grep -Fq '#define FMT_VERSION 120100' "$SOURCE_DIR/lib/ios_arm64/openimageio/include/OpenImageIO/detail/fmt/base.h"
+          test -n "$(find "$SOURCE_DIR/lib/ios_arm64/draco" -name '*Config.cmake' -print -quit)"
+          test -n "$(find "$SOURCE_DIR/lib/ios_arm64/meshoptimizer" -name '*config.cmake' -print -quit)"
 
-          # These are the four symbols that failed at Blender's final link in
-          # run 16. Checking defined archive symbols here makes the expensive
-          # main compile conditional on a coherent Python runtime bundle.
+          file "$SOURCE_DIR/lib/ios_arm64/python/lib/libpython3.13.a"
+          find "$SOURCE_DIR/lib/ios_arm64/draco/lib" -type f \( -name '*.a' -o -name '*.dylib' \) -maxdepth 2 -print
+          find "$SOURCE_DIR/lib/ios_arm64/meshoptimizer/lib" -type f \( -name '*.a' -o -name '*.dylib' \) -maxdepth 2 -print
+
           nm -gU "$SOURCE_DIR/lib/ios_arm64/ssl/lib/libcrypto.a" | \
             grep -Eq '[[:space:]]_EVP_MD_CTX_get_size_ex$'
           nm -gU "$SOURCE_DIR/lib/ios_arm64/ssl/lib/libssl.a" | \
@@ -237,27 +191,7 @@ jobs:
           nm -gU "$SOURCE_DIR/lib/ios_arm64/ffi/lib/libffi.a" | \
             grep -Eq '[[:space:]]_ffi_type_longdouble$'
 
-      - name: Compile iPhoneOS dependency header probe
-        run: |
-          printf '%s\n' \
-            '#include <OpenImageIO/imageio.h>' \
-            '#include <fmt/ranges.h>' \
-            'int main() { auto value = fmt::format("{}", 1); return value.empty(); }' | \
-          xcrun --sdk iphoneos clang++ \
-            -target arm64-apple-ios18.0 \
-            -std=c++20 \
-            -DIMATH_HALF_NO_LOOKUP_TABLE \
-            -I"$SOURCE_DIR/lib/ios_arm64/openimageio/include" \
-            -I"$SOURCE_DIR/lib/ios_arm64/fmt/include" \
-            -I"$SOURCE_DIR/lib/ios_arm64/imath/include" \
-            -I"$SOURCE_DIR/lib/ios_arm64/imath/include/Imath" \
-            -I"$SOURCE_DIR/lib/ios_arm64/openexr/include" \
-            -I"$SOURCE_DIR/lib/ios_arm64/openexr/include/OpenEXR" \
-            -I"$SOURCE_DIR/lib/ios_arm64/tbb/include" \
-            -fsyntax-only \
-            -x c++ -
-
-      - name: Save verified iOS bootstrap dependency cache
+      - name: Save verified dependency cache
         if: steps.ios-bootstrap-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
@@ -269,130 +203,124 @@ jobs:
             work/blender/lib/ios_arm64/zlib
             work/blender/lib/ios_arm64/bzip2
             work/blender/lib/ios_arm64/lzma
-            work/blender/lib/ios_arm64/fmt
-            work/blender/lib/ios_arm64/eigen
-          key: ios-bootstrap-${{ runner.os }}-xcode-16.4-${{ env.BLENDER_REF }}-python-3.13.9-runtime-v1-fmt-12.1.0-eigen
+            work/blender/lib/ios_arm64/libb2
+            work/blender/lib/ios_arm64/draco
+            work/blender/lib/ios_arm64/meshoptimizer
+          key: ios-5.2-bootstrap-${{ runner.os }}-xcode-26.3-${{ env.BLENDER_REF }}-python-3.13.13-draco-meshopt-v1
 
-      - name: Configure Xcode project
+      - name: Configure full Blender 5.2 iPad profile
         run: |
-          platform_apple_cmake="$SOURCE_DIR/build_files/cmake/platform/platform_apple.cmake"
-
-          test -f "$SOURCE_DIR/lib/ios_arm64/openexr/lib/libOpenEXR.dylib"
-          test -f "$SOURCE_DIR/lib/ios_arm64/openexr/lib/libOpenEXRCore.dylib"
-          test -f "$SOURCE_DIR/lib/ios_arm64/openexr/lib/libIex.dylib"
-          test -f "$SOURCE_DIR/lib/ios_arm64/openexr/lib/libIlmThread.dylib"
-          test -f "$SOURCE_DIR/lib/ios_arm64/imath/lib/libImath.dylib"
-          test -f "$SOURCE_DIR/lib/ios_arm64/openimageio/lib/libOpenImageIO.dylib"
-          test -f "$SOURCE_DIR/lib/ios_arm64/openimageio/lib/libOpenImageIO_Util.dylib"
-          test -x "$SOURCE_DIR/lib/macos_arm64/openimageio/bin/oiiotool"
-
-          # The current iOS library bundle contains OpenEXR and Imath but omits
-          # their CMake package metadata. Define the imported target expected by
-          # Blender 5.1.2 using the bundled device libraries.
-          perl -0pi -e '
-            s{^find_package\(OpenEXR REQUIRED\)$}{if(WITH_APPLE_CROSSPLATFORM)
-              add_library(OpenEXR::OpenEXR INTERFACE IMPORTED)
-              set_target_properties(OpenEXR::OpenEXR PROPERTIES
-                INTERFACE_INCLUDE_DIRECTORIES "\${LIBDIR}/openexr/include;\${LIBDIR}/openexr/include/OpenEXR;\${LIBDIR}/imath/include;\${LIBDIR}/imath/include/Imath"
-                INTERFACE_LINK_LIBRARIES "\${LIBDIR}/openexr/lib/libOpenEXR.dylib;\${LIBDIR}/openexr/lib/libOpenEXRCore.dylib;\${LIBDIR}/openexr/lib/libIex.dylib;\${LIBDIR}/openexr/lib/libIlmThread.dylib;\${LIBDIR}/imath/lib/libImath.dylib"
-              )
-              set(OpenEXR_FOUND TRUE)
-              set(OpenEXR_VERSION 3.3.2)
-            else()
-              find_package(OpenEXR REQUIRED)
-            endif()}m;
-
-            s{^find_package\(OpenImageIO REQUIRED\)$}{if(WITH_APPLE_CROSSPLATFORM)
-              add_library(OpenImageIO::OpenImageIO INTERFACE IMPORTED)
-              set_target_properties(OpenImageIO::OpenImageIO PROPERTIES
-                INTERFACE_INCLUDE_DIRECTORIES "\${LIBDIR}/openimageio/include"
-                INTERFACE_LINK_LIBRARIES "\${LIBDIR}/openimageio/lib/libOpenImageIO.dylib;\${LIBDIR}/openimageio/lib/libOpenImageIO_Util.dylib"
-              )
-              add_executable(OpenImageIO::oiiotool IMPORTED)
-              set_target_properties(OpenImageIO::oiiotool PROPERTIES
-                IMPORTED_LOCATION "\${CMAKE_SOURCE_DIR}/lib/macos_arm64/openimageio/bin/oiiotool"
-              )
-              set(OpenImageIO_FOUND TRUE)
-              set(OpenImageIO_VERSION 3.0.6)
-            else()
-              find_package(OpenImageIO REQUIRED)
-            endif()}m
-          ' "$platform_apple_cmake"
-
-          test "$(grep -Fc 'add_library(OpenEXR::OpenEXR INTERFACE IMPORTED)' "$platform_apple_cmake")" -eq 1
-          test "$(grep -Fc 'add_library(OpenImageIO::OpenImageIO INTERFACE IMPORTED)' "$platform_apple_cmake")" -eq 1
+          set -o pipefail
+          ios_sdk_root="$(xcrun --sdk iphoneos --show-sdk-path)"
+          ios_dev_root="$(dirname "$ios_sdk_root")"
 
           cmake -G Xcode \
             -S "$SOURCE_DIR" \
             -B "$BUILD_DIR" \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DWITH_APPLE_CROSSPLATFORM=ON \
             -DAPPLE_TARGET_DEVICE=ios \
+            -DCMAKE_FIND_ROOT_PATH="$ios_dev_root;$(dirname "$ios_dev_root");$SOURCE_DIR/lib/ios_arm64" \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=18.0 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0 \
+            -DCMAKE_XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET=26.0 \
             -DCMAKE_XCODE_GENERATE_SCHEME=ON \
             -DCMAKE_BUILD_TYPE=Release \
+            -DBLENDER_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
             -DCMAKE_XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
-            -DBLENDER_IOS_SKIP_INSTALL_CODESIGN=ON \
             -DPYTHON_VERSION=3.13 \
             -DPYTHON_EXECUTABLE="$SOURCE_DIR/lib/macos_arm64/python/bin/python3.13" \
             -DPYTHON_INCLUDE_DIR="$SOURCE_DIR/lib/ios_arm64/python/include/python3.13" \
             -DPYTHON_INCLUDE_CONFIG_DIR="$SOURCE_DIR/lib/ios_arm64/python/include/python3.13" \
             -DPYTHON_LIBRARY="$SOURCE_DIR/lib/ios_arm64/python/lib/libpython3.13.a" \
             -DPYTHON_LIBPATH="$SOURCE_DIR/lib/ios_arm64/python/lib" \
-            -DEigen3_DIR="$SOURCE_DIR/lib/ios_arm64/eigen/share/eigen3/cmake" \
-            -DWITH_CYCLES=OFF \
-            -DWITH_CODEC_FFMPEG=OFF \
-            -DWITH_ALEMBIC=OFF \
-            -DWITH_OPENVDB=OFF \
-            -DWITH_OPENIMAGEDENOISE=OFF \
-            -DWITH_USD=OFF \
-            -DWITH_HYDRA=OFF \
-            -DWITH_LIBMV=OFF \
-            -DWITH_RUBBERBAND=OFF \
+            -DWITH_PYTHON=ON \
+            -DWITH_CYCLES=ON \
+            -DWITH_CYCLES_DEVICE_METAL=ON \
+            -DWITH_CYCLES_EMBREE=ON \
+            -DWITH_CYCLES_PATH_GUIDING=ON \
+            -DWITH_CODEC_FFMPEG=ON \
+            -DWITH_ALEMBIC=ON \
+            -DWITH_OPENVDB=ON \
+            -DWITH_OPENIMAGEDENOISE=ON \
+            -DWITH_USD=ON \
+            -DWITH_AUDASPACE=ON \
+            -DWITH_COREAUDIO=OFF \
+            -DWITH_OPENAL=ON \
+            -DWITH_CODEC_SNDFILE=ON \
+            -DWITH_DRACO=ON \
+            -DWITH_MESHOPTIMIZER=ON \
+            -DWITH_OPENSUBDIV=ON \
             -DWITH_INTERNATIONAL=ON \
+            -DWITH_HYDRA=OFF \
             -DWITH_XR_OPENXR=OFF \
-            -DWITH_OPENSUBDIV=ON
+            2>&1 | tee "$GITHUB_WORKSPACE/cmake-configure.log"
 
           xcodebuild -project "$BUILD_DIR/Blender.xcodeproj" -list
+          bash ./scripts/write-feature-manifest.sh \
+            "$BUILD_DIR/CMakeCache.txt" \
+            "$ARTIFACT_DIR/Blender-iPad-M4-5.2-feature-manifest.txt"
 
-      - name: Build and install unsigned device application
+          {
+            echo "Blender source: $BLENDER_REF"
+            echo "iOS libraries: $(git -C "$SOURCE_DIR/lib/ios_arm64" rev-parse HEAD)"
+            echo "macOS libraries: $(git -C "$SOURCE_DIR/lib/macos_arm64" rev-parse HEAD)"
+            echo "Compatibility patch: $(shasum -a 256 patches/ios-5.2-m4-full.patch | awk '{print $1}')"
+            echo "Harness commit: $GITHUB_SHA"
+          } > "$ARTIFACT_DIR/Blender-iPad-M4-5.2-source-manifest.txt"
+
+      - name: Build complete unsigned device application
         run: |
           set -o pipefail
           xcodebuild \
             -project "$BUILD_DIR/Blender.xcodeproj" \
-            -target install \
+            -scheme blender \
             -configuration Release \
             -sdk iphoneos \
             -jobs 3 \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY= \
+            EXPANDED_CODE_SIGN_IDENTITY=- \
+            COMPILER_INDEX_STORE_ENABLE=NO \
             build 2>&1 | tee "$GITHUB_WORKSPACE/xcodebuild.log"
 
-      - name: Package unsigned IPA
+      - name: Package full-memory and Signulous fallback IPAs
         run: |
+          cp "$SOURCE_DIR/release/ios/entitlements.plist" \
+            "$ARTIFACT_DIR/Blender-iPad-M4-5.2-full-memory-entitlements.plist"
+
           bash ./scripts/package-ipa.sh \
             "$BUILD_DIR" \
-            "$ARTIFACT_DIR/Blender-iPad-M4-5.1.2-unsigned.ipa"
+            "$ARTIFACT_DIR/Blender-iPad-M4-5.2-full-memory-unsigned.ipa" \
+            full-memory
 
-      - name: Upload unsigned IPA
+          bash ./scripts/package-ipa.sh \
+            "$BUILD_DIR" \
+            "$ARTIFACT_DIR/Blender-iPad-M4-5.2-Signulous-unsigned.ipa" \
+            signulous
+
+      - name: Upload unsigned Blender 5.2 build
         uses: actions/upload-artifact@v4
         with:
-          name: Blender-iPad-M4-5.1.2-unsigned
-          path: artifacts/Blender-iPad-M4-5.1.2-unsigned.ipa
+          name: Blender-iPad-M4-5.2-full
+          path: artifacts/**
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 21
 
-      - name: Upload diagnostics
+      - name: Upload build diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Blender-iPad-M4-5.1.2-build-diagnostics
+          name: Blender-iPad-M4-5.2-build-diagnostics
           path: |
+            bootstrap-configure.log
+            bootstrap-build.log
+            cmake-configure.log
             xcodebuild.log
-            python-deps-configure.log
-            python-deps-build.log
             work/build-ios/CMakeCache.txt
             work/build-ios/CMakeFiles/CMakeOutput.log
             work/build-ios/CMakeFiles/CMakeError.log
+            artifacts/*manifest.txt
           if-no-files-found: ignore
-          retention-days: 14
+          retention-days: 21

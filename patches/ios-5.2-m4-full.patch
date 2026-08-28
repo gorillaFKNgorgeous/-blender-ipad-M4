@@ -1,0 +1,271 @@
+diff --git a/build_files/cmake/platform/platform_apple.cmake b/build_files/cmake/platform/platform_apple.cmake
+index bdf0202c207e28883d2aa9686675ffa033bdc1e2..dc0480798375d987c326036334ce21b4e53e23fd 100644
+--- a/build_files/cmake/platform/platform_apple.cmake
++++ b/build_files/cmake/platform/platform_apple.cmake
+@@ -25,8 +25,8 @@ endfunction()
+ # -------------------------------------------------------------------------------
+ # Apple cross-platform device build config
+ if(WITH_APPLE_CROSSPLATFORM)
+-  # Disable modules with no planned/required support on iOS.
+-  set(WITH_USD OFF CACHE BOOL "Disable until we fix issue with release build" FORCE)
++  # Keep core USD import/export enabled when the iOS dependency bundle supplies it.
++  # Hydra remains separately disabled below because that bundle has no HgiMetal/Storm backend.
+   set(NO_PLATFORM_SUPPORT_MSG "Auto disabled as APPLE_TARGET_DEVICE=ios")
+   set(WITH_VULKAN_BACKEND  OFF CACHE BOOL ${NO_PLATFORM_SUPPORT_MSG} FORCE)
+   set(WITH_OPENGL_BACKEND  OFF CACHE BOOL ${NO_PLATFORM_SUPPORT_MSG} FORCE)
+@@ -35,9 +35,8 @@ if(WITH_APPLE_CROSSPLATFORM)
+   set(WITH_PYTHON_MODULE OFF CACHE BOOL ${NO_PLATFORM_SUPPORT_MSG} FORCE)
+   # Disable these modules for now
+   set(WITH_PYTHON_INSTALL_ZSTANDARD OFF CACHE BOOL "Disable until iOS build supports SSL" FORCE)
+-  # Disable Audaspace as it had dependencies on CoreAudio components which do not exist on iOS
+-  # (like AudioToolbox/CoreAudioClock.h)
+-  set(WITH_AUDASPACE OFF CACHE BOOL "Auto disabled due to lack of specific CoreAudio support on iOS" FORCE)
++  # Audaspace's Blender integration already disables its CoreAudio plug-in. Keep the base
++  # library, OpenAL device, and libsndfile codecs available on iOS.
+   # Temp: Disabled pending compilation of HgI/Hydra Storm for Metal on iOS.
+   #       (Set DPXR_ENABLE_METAL_SUPPORT=ON in usd.cmake for WITH_APPLE_CROSSPLATFORM platform)
+   set(WITH_HYDRA  OFF CACHE BOOL "Auto disabled due to lack of HgI/Hydra Storm for Metal on iOS" FORCE)
+@@ -45,8 +44,6 @@ if(WITH_APPLE_CROSSPLATFORM)
+   set(WITH_XR_OPENXR OFF CACHE BOOL ${NO_PLATFORM_SUPPORT_MSG} FORCE)
+   set(WITH_RUBBERBAND OFF CACHE BOOL ${NO_PLATFORM_SUPPORT_MSG} FORCE)
+   set(WITH_JACK OFF CACHE BOOL ${NO_PLATFORM_SUPPORT_MSG} FORCE)
+-  set(WITH_OPENAL OFF CACHE BOOL ${NO_PLATFORM_SUPPORT_MSG} FORCE)
+-  set(WITH_CODEC_SNDFILE OFF CACHE BOOL ${NO_PLATFORM_SUPPORT_MSG} FORCE)
+   set(WITH_OPENCOLLADA OFF CACHE BOOL ${NO_PLATFORM_SUPPORT_MSG} FORCE)
+   set(WITH_OPENMP OFF CACHE BOOL ${NO_PLATFORM_SUPPORT_MSG} FORCE)
+   set(WITH_HARU OFF CACHE BOOL ${NO_PLATFORM_SUPPORT_MSG} FORCE)
+diff --git a/intern/ghost/intern/GHOST_SystemIOS.hh b/intern/ghost/intern/GHOST_SystemIOS.hh
+index d9268f0108fac89d5b6c8fd575c392942078c439..eb12750cefc17eb7c624c91aa1655d3b1c71b095 100644
+--- a/intern/ghost/intern/GHOST_SystemIOS.hh
++++ b/intern/ghost/intern/GHOST_SystemIOS.hh
+@@ -209,6 +209,9 @@ class GHOST_SystemIOS : public GHOST_System {
+    */
+   GHOST_TSuccess getButtons(GHOST_Buttons &buttons) const override;
+ 
++  /** Keep asynchronous indirect-pointer events and queried button state in sync. */
++  void setPointerButtonState(GHOST_TButton button, bool down);
++
+   GHOST_TCapabilityFlag getCapabilities() const override;
+ 
+   /**
+@@ -357,6 +360,9 @@ class GHOST_SystemIOS : public GHOST_System {
+   /** State of the modifiers. */
+   uint32_t m_modifierMask;
+ 
++  /** State of mouse/trackpad buttons, indexed by #GHOST_TButton. */
++  uint32_t m_pointerButtonMask;
++
+   /** Ignores window size messages (when window is dragged). */
+   bool m_ignoreWindowSizedMessages;
+ 
+diff --git a/intern/ghost/intern/GHOST_SystemIOS.mm b/intern/ghost/intern/GHOST_SystemIOS.mm
+index 95d66769731ac08974cb7ae23f99d4ca586135c9..625fc02948ad2bbb3fc97d9cb0665a780bde7ab8 100644
+--- a/intern/ghost/intern/GHOST_SystemIOS.mm
++++ b/intern/ghost/intern/GHOST_SystemIOS.mm
+@@ -262,6 +262,7 @@ extern "C" int GHOST_HACK_getFirstFile(char buf[FIRSTFILEBUFLG])
+ GHOST_SystemIOS::GHOST_SystemIOS()
+ {
+   m_modifierMask = 0;
++  m_pointerButtonMask = 0;
+   m_outsideLoopEventProcessed = false;
+   m_needDelayedApplicationBecomeActiveEventProcessing = false;
+ 
+@@ -498,11 +499,25 @@ void GHOST_SystemIOS::setModifierKey(GHOST_TModifierKey modifier, bool down)
+   }
+ }
+ 
+-GHOST_TSuccess GHOST_SystemIOS::getButtons(GHOST_Buttons & /*buttons*/) const
++GHOST_TSuccess GHOST_SystemIOS::getButtons(GHOST_Buttons &buttons) const
+ {
+-  /* iOS Passthrough. */
++  buttons.clear();
++  for (int button = 0; button < GHOST_kButtonNum; button++) {
++    buttons.set(GHOST_TButton(button), (m_pointerButtonMask & (1u << button)) != 0);
++  }
+   return GHOST_kSuccess;
+ }
++
++void GHOST_SystemIOS::setPointerButtonState(const GHOST_TButton button, const bool down)
++{
++  const uint32_t mask = 1u << uint32_t(button);
++  if (down) {
++    m_pointerButtonMask |= mask;
++  }
++  else {
++    m_pointerButtonMask &= ~mask;
++  }
++}
+ GHOST_TCapabilityFlag GHOST_SystemIOS::getCapabilities() const
+ {
+   return GHOST_TCapabilityFlag(GHOST_kCapabilityGPUReadFrontBuffer |
+diff --git a/intern/ghost/intern/GHOST_WindowIOS.mm b/intern/ghost/intern/GHOST_WindowIOS.mm
+index c83a14fb3502ab91530143baa6310c84e6358032..f22a48623fa86cd1b981e9017616ed7bbd465166 100644
+--- a/intern/ghost/intern/GHOST_WindowIOS.mm
++++ b/intern/ghost/intern/GHOST_WindowIOS.mm
+@@ -456,6 +456,40 @@ typedef struct UserInputEvent {
+   }
+ }
+ 
++- (void)pushIndirectPointerCursorEvent
++{
++  system->pushEvent(std::make_unique<GHOST_EventCursor>(system->getMilliSeconds(),
++                                                        GHOST_kEventCursorMove,
++                                                        window,
++                                                        mouse_cursor_x,
++                                                        mouse_cursor_y,
++                                                        GHOST_TABLET_DATA_NONE));
++}
++
++- (void)pushIndirectPointerButtonEvent:(GHOST_TEventType)event_type
++                            buttonMask:(GHOST_TButton)button_mask
++{
++  system->setPointerButtonState(button_mask, event_type == GHOST_kEventButtonDown);
++  system->pushEvent(std::make_unique<GHOST_EventButton>(system->getMilliSeconds(),
++                                                        event_type,
++                                                        window,
++                                                        button_mask,
++                                                        GHOST_TABLET_DATA_NONE));
++}
++
++- (void)releaseIndirectPointerButtons
++{
++  if (mouse_buttons_held & UIEventButtonMaskPrimary) {
++    [self pushIndirectPointerButtonEvent:GHOST_kEventButtonUp
++                              buttonMask:GHOST_kButtonMaskLeft];
++  }
++  if (mouse_buttons_held & UIEventButtonMaskSecondary) {
++    [self pushIndirectPointerButtonEvent:GHOST_kEventButtonUp
++                              buttonMask:GHOST_kButtonMaskRight];
++  }
++  mouse_buttons_held = 0;
++}
++
+ /* Turn the user inputs into Blender events.
+  * We batch up the events rather than send them directly in the gesture
+  * recognisers to ensure we don't interleave events if we detect simultaneous
+@@ -469,37 +503,6 @@ typedef struct UserInputEvent {
+       IOS_INPUT_LOG(@"%d-%@ %f,%f",
+                     i,
+                     event_info.getEventTypeDesc(event_type),
+-
+-                  - (void)pushIndirectPointerCursorEvent
+-                  {
+-                    system->pushEvent(std::make_unique<GHOST_EventCursor>(system->getMilliSeconds(),
+-                                                            GHOST_kEventCursorMove,
+-                                                            window,
+-                                                            mouse_cursor_x,
+-                                                            mouse_cursor_y,
+-                                                            GHOST_TABLET_DATA_NONE));
+-                  }
+-
+-                  - (void)pushIndirectPointerButtonEvent:(GHOST_TEventType)event_type
+-                                             buttonMask:(GHOST_TButton)button_mask
+-                  {
+-                    system->pushEvent(std::make_unique<GHOST_EventButton>(system->getMilliSeconds(),
+-                                                            event_type,
+-                                                            window,
+-                                                            button_mask,
+-                                                            GHOST_TABLET_DATA_NONE));
+-                  }
+-
+-                  - (void)releaseIndirectPointerButtons
+-                  {
+-                    if (mouse_buttons_held & UIEventButtonMaskPrimary) {
+-                      [self pushIndirectPointerButtonEvent:GHOST_kEventButtonUp buttonMask:GHOST_kButtonMaskLeft];
+-                    }
+-                    if (mouse_buttons_held & UIEventButtonMaskSecondary) {
+-                      [self pushIndirectPointerButtonEvent:GHOST_kEventButtonUp buttonMask:GHOST_kButtonMaskRight];
+-                    }
+-                    mouse_buttons_held = 0;
+-                  }
+                     event_info.location.x,
+                     event_info.location.y);
+ 
+diff --git a/release/ios/Blender.app/Info.plist b/release/ios/Blender.app/Info.plist
+index c17150712ad335e8ba6c121334f8e90c7e38a07f..16e79b4537821a152ae86b93f57e4df0a8ce4c3d 100644
+--- a/release/ios/Blender.app/Info.plist
++++ b/release/ios/Blender.app/Info.plist
+@@ -53,6 +53,8 @@
+ 	<true/>
+ 	<key>UIRequiresFullScreen</key>
+ 	<true/>
++	<key>UIApplicationSupportsIndirectInputEvents</key>
++	<true/>
+ 	<key>UIViewControllerBasedStatusBarAppearance</key>
+ 	<false/>
+ 	<key>UIStatusBarHidden</key>
+diff --git a/release/ios/scripts/copy_bundle_data.sh b/release/ios/scripts/copy_bundle_data.sh
+index 51ba45b97c027f1c4d28b029b0bd6c2349a53382..657555293a4a97de64f720ba04aa6e64486eba8b 100755
+--- a/release/ios/scripts/copy_bundle_data.sh
++++ b/release/ios/scripts/copy_bundle_data.sh
+@@ -73,12 +73,6 @@ if [ ! -d "$DEST/scripts/addons_core/cycles/source" ]; then
+   fi
+ fi
+ 
+-# ── Remove addons that require Python >= 3.12 (type alias syntax) ──
+-if [ -d "$DEST/scripts/addons_core/bl_pkg" ]; then
+-  echo "Removing bl_pkg addon (requires Python 3.12+)..."
+-  rm -rf "$DEST/scripts/addons_core/bl_pkg"
+-fi
+-
+ # ── Datafiles: fonts, icons, colormanagement, studiolights ──────────
+ for subdir in fonts icons colormanagement studiolights cursors; do
+   if [ -d "$SRC_DIR/release/datafiles/$subdir" ] && [ ! -d "$DEST/datafiles/$subdir" ]; then
+@@ -109,6 +103,25 @@ if [ -d "$SRC_DIR/assets" ] && [ ! -d "$DEST/datafiles/assets/brushes" ]; then
+     "$SRC_DIR/assets/" "$DEST/datafiles/assets/"
+ fi
+ 
++# ── USD schemas/plugins and MaterialX libraries ─────────────────────
++# These are normally installed by source/creator/CMakeLists.txt. The iOS target builds a
++# directly deployable app instead, so mirror the same runtime data into that bundle.
++if [ -d "$LIBDIR/usd/lib/usd" ]; then
++  echo "Copying USD schemas..."
++  mkdir -p "$DEST/datafiles/usd"
++  rsync -a "$LIBDIR/usd/lib/usd/" "$DEST/datafiles/usd/"
++fi
++if [ -d "$LIBDIR/usd/plugin/usd" ]; then
++  echo "Copying USD plugins..."
++  mkdir -p "$DEST/datafiles/usd"
++  rsync -a "$LIBDIR/usd/plugin/usd/" "$DEST/datafiles/usd/"
++fi
++if [ -d "$LIBDIR/materialx/libraries" ]; then
++  echo "Copying MaterialX libraries..."
++  mkdir -p "$BUNDLE_ASSETS/lib/materialx"
++  rsync -a "$LIBDIR/materialx/libraries/" "$BUNDLE_ASSETS/lib/materialx/"
++fi
++
+ # ── Patch OCIO config for iOS (bundled library is v2.4, config is v2.5) ──
+ OCIO_CFG="$DEST/datafiles/colormanagement/config.ocio"
+ if [ -f "$OCIO_CFG" ]; then
+diff --git a/source/blender/gpu/metal/mtl_backend.mm b/source/blender/gpu/metal/mtl_backend.mm
+index 200f3c5b19903d8d4319a70ea28840d684c3f72f..c05dea8ac700cda3aa10ed29bf2af4f3f62ee18d 100644
+--- a/source/blender/gpu/metal/mtl_backend.mm
++++ b/source/blender/gpu/metal/mtl_backend.mm
+@@ -539,10 +539,22 @@ void MTLBackend::capabilities_init(MTLContext *ctx)
+   GCaps.geometry_shader_support = false;
+ 
+ #ifdef WITH_APPLE_CROSSPLATFORM
+-  /* TODO(iOS IOS-002): Unlimited concurrent Metal shader compilation triggers jetsam on older
+-   * iPads. Fixed cap for now; should be dynamic based on thermal + memory state. See
+-   * doc/ios/known_issues.md. */
+-  GCaps.max_parallel_compilations = 2;
++  /* Keep the proven low-memory jetsam guard, but do not impose the same fixed limit on
++   * high-memory iPad Pro hardware. A 12 GiB threshold separates the 16 GiB M4/M5 class from
++   * lower-memory devices. Leave one performance core available for the interactive UI. */
++  const uint64_t physical_memory = [NSProcessInfo processInfo].physicalMemory;
++  const bool high_memory_device = physical_memory >= (12ull * 1024ull * 1024ull * 1024ull);
++  const NSProcessInfoThermalState thermal_state = [NSProcessInfo processInfo].thermalState;
++  const bool thermally_constrained = thermal_state >= NSProcessInfoThermalStateSerious;
++  if (high_memory_device && !thermally_constrained) {
++    GCaps.max_parallel_compilations = std::max(
++        2,
++        std::min(BLI_system_thread_count(),
++                 MTLBackend::capabilities.num_performance_cores - 1));
++  }
++  else {
++    GCaps.max_parallel_compilations = 2;
++  }
+ #else
+   /* Compile shaders on performance cores but leave one free so UI is still responsive.
+    * Also respect command line option to reduce number of threads. */
+

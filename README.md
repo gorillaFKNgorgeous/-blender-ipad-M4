@@ -1,96 +1,64 @@
-# Blender on M4 iPad Pro
+# Blender 5.2 LTS for iPad Pro M4
 
-This repository builds a deliberately narrow, sideloadable Blender prototype for Apple-silicon iPads.
+This branch builds a full-capability Blender 5.2 LTS iPad application for an iPad Pro M4 running iPadOS 27. It does not inherit the deliberately reduced 5.1 bring-up profile.
 
-## First milestone
+## Reproducible source
 
-- Blender's official iOS work plus the hardware-keyboard/mouse work from PR `145484`, pinned together at commit `19542aff486fe6db878ecdbc795999d50499406e`.
-- That commit is based on Blender's official iOS branch at `2b3dfad92b18185aa518c227a0605f43ce8442db`, avoiding a conflict-prone merge with the newer experimental branch.
-- Arm64 iPhoneOS build, tested first on an M4 iPad Pro.
-- Metal viewport, Blender's normal desktop interface, Files document access, touch/Pencil support from the upstream branch, and hardware keyboard/mouse input from the pinned PR.
-- A smaller bring-up profile: Cycles, video editing dependencies, USD, OpenVDB and other heavyweight modules are disabled until the app launches reliably.
+- Blender iOS source: [`salmazov/blender-ios`](https://github.com/salmazov/blender-ios/tree/ios-new), pinned at `2bc556e58e82eb3a801895f2cb1881c0267e5cd5`.
+- iOS dependency bundle: `393201c7c8525941553f6a96e19b909d6b3bfc4f`.
+- macOS host-tool bundle: `a3e20428fb0ab2231903608cdca90301e130dbfc`.
+- Minimum deployment target: iPadOS 26.0. The intended device is iPadOS 27 on a 1 TB M4 iPad Pro.
 
-This is not an App Store port and it is not current desktop Blender. The pinned source labels itself Blender 5.0 alpha and remains experimental, with known missing or incomplete platform features.
+The compatibility patch repairs a malformed Objective-C method placement in the public head, retains queried mouse-button state and indirect pointer declarations from our last working input branch, preserves Blender's extension manager, bundles USD/MaterialX runtime data, and gives high-memory iPads an M4-class shader-compilation policy.
 
-## Build
+## Capability policy
 
-Run the **Build unsigned iPad IPA** workflow from GitHub Actions. It uses an Apple-silicon `macos-15` runner and Xcode 16.4, fetches the pinned keyboard/mouse-enabled Blender source and its official precompiled iOS libraries, builds the app, and uploads an unsigned IPA artifact.
+Configuration fails unless every feature in the enabled column remains `ON`. The generated feature manifest also records every other `WITH_*` setting, so a dependency cannot silently disappear.
 
-An unsigned IPA cannot launch on iPadOS. It must be signed by one of these routes:
+| Required in this build | Deliberately blocked by a missing iPad backend/runtime |
+|---|---|
+| Python 3.13 and `bl_pkg` extension manager | Hydra Storm: pinned USD has no HgiMetal or Storm backend |
+| Cycles CPU + Metal, EEVEE, Embree and path guiding | OpenXR: iPadOS has no OpenXR runtime/backend |
+| FFmpeg | Cycles OSL: upstream iOS path cannot perform build-time OSL compilation |
+| Alembic | |
+| OpenVDB | |
+| OpenImageDenoise | |
+| Core USD import/export and bundled schemas/plugins | |
+| Audaspace with OpenAL and libsndfile | |
+| Draco and Meshoptimizer | |
+| OpenSubdiv and internationalization | |
 
-1. SideStore or another on-device signer using a personal Apple ID. Free provisioning normally expires after seven days and must be refreshed.
-2. A paid Apple Developer account and a CI signing certificate/provisioning profile.
-3. TestFlight after enabling the signed-distribution workflow in a later milestone.
+The public iOS dependency pin contains FFmpeg, Alembic, OpenVDB, OpenImageDenoise, OpenSubdiv, USD, OpenAL, and libsndfile. Its Python runtime is only 3.11, however, while Blender 5.2 and the host tools use Python 3.13. The workflow therefore builds Python 3.13.13 for iOS instead of deleting incompatible Blender functionality. Draco and Meshoptimizer are also built for iOS during that bootstrap.
 
-The first build intentionally avoids embedding signing credentials in GitHub Actions. We will add exactly one installation route after the unsigned application compiles successfully.
+## M4 performance and memory
 
-## Build status
+The public source hard-caps viewport Metal shader compilation at two threads for every iPad because older low-memory devices can be jetsam-killed. This branch keeps that protection below 12 GB, but a 16 GB-class M4/M5 uses its performance cores while leaving one core available for the UI. Serious thermal pressure falls back to the safe two-thread limit.
 
-GitHub Actions run [`32698659708`](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/actions/runs/32698659708) completed successfully on 24 August 2026:
+Cycles already queries live process memory and Metal working-set headroom. Its iOS dispatch-size cap remains because it protects against the iPadOS GPU watchdog timeout; it is not an M2 memory throttle.
 
-- The application executable is a 64-bit arm64 Mach-O.
-- Bundle identifier: `com.gorillafkngorgeous.blenderipad`.
-- The executable target compiled, but the resulting IPA omitted Blender's installed `Assets` tree and closes immediately when launched. Do not use that artifact.
-- The workflow now builds Blender's `install` target and refuses to package an app without its UI startup scripts, bundled `.blend` assets, and at least 100 asset files. (The iOS target embeds `startup.blend` into the executable.)
+## Build and artifacts
 
-Corrected GitHub Actions run [`32707024830`](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/actions/runs/32707024830) completed successfully on 24 August 2026:
+Run **Build full Blender 5.2 iPad M4 IPA** from GitHub Actions on branch `upgrade/ios-5.2-m4-full`. The workflow uses an Apple-silicon `macos-15` runner with Xcode 26.3 and builds the `blender` scheme, whose post-build phase creates the complete application bundle.
 
-- The complete app bundle contains 2,613 asset files and is 605 MiB uncompressed.
-- The unsigned IPA is 189,000,156 bytes and contains 3,048 archive entries.
-- All 80 Mach-O executables, dynamic libraries, and Python extensions report arm64.
-- Unsigned IPA SHA-256: `a8d8ef92e25bb8fc37112e3963692016a942cadbb3e25fc4711357351e990991`.
-- GitHub artifact: `Blender-iPad-M4-unsigned`, retained until 7 September 2026.
+One artifact contains:
 
-## Local macOS build
+- `Blender-iPad-M4-5.2-full-memory-unsigned.ipa` — retains the increased-memory capability request for a provisioning profile that supports it.
+- `Blender-iPad-M4-5.2-Signulous-unsigned.ipa` — removes that restricted key only from this fallback copy for ordinary Signulous-style signing.
+- Full-memory entitlements, exact source manifest, and complete CMake feature manifest.
 
-On an Apple-silicon Mac with Xcode 16.4 selected:
+Both IPAs are unsigned. Packaging refuses an incomplete bundle: it checks Blender 5.2, the bundle identifier, Python 3.13, `bl_pkg`, Cycles Metal kernel sources, USD schemas, MaterialX data, bundled `.blend` assets, key runtime dylibs, arm64 architecture, unresolved Git LFS pointers, minimum asset count, and archive entry count.
 
-```bash
-bash ./scripts/prepare-source.sh "$PWD/work/blender"
+## Current status
 
-cmake -G Xcode \
-  -S "$PWD/work/blender" \
-  -B "$PWD/work/build-ios" \
-  -DAPPLE_TARGET_DEVICE=ios \
-  -DCMAKE_OSX_ARCHITECTURES=arm64 \
-  -DCMAKE_OSX_DEPLOYMENT_TARGET=18.0 \
-  -DCMAKE_XCODE_GENERATE_SCHEME=ON \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DBLENDER_IOS_SKIP_INSTALL_CODESIGN=ON \
-  -DWITH_CYCLES=OFF \
-  -DWITH_FFMPEG=OFF \
-  -DWITH_OPENVDB=OFF \
-  -DWITH_OPENIMAGEDENOISE=OFF \
-  -DWITH_USD=OFF \
-  -DWITH_HYDRA=OFF \
-  -DWITH_INTERNATIONAL=ON
+The 5.2 workflow is being validated on the isolated upgrade branch. It is not merged into `main`, and the older successful 5.1.2 artifacts remain untouched until the 5.2 build and signed-device launch checks pass.
 
-xcodebuild \
-  -project "$PWD/work/build-ios/Blender.xcodeproj" \
-  -target install \
-  -configuration Release \
-  -sdk iphoneos \
-  CODE_SIGNING_ALLOWED=NO \
-  CODE_SIGNING_REQUIRED=NO \
-  CODE_SIGN_IDENTITY= \
-  build
+## Upstream findings carried here
 
-bash ./scripts/package-ipa.sh "$PWD/work/build-ios" "$PWD/artifacts/Blender-iPad-M4-unsigned.ipa"
-```
+- The public `ios-new` head is based on Blender 5.2.0 LTS and includes newer keyboard, Pencil, Files, pointer, ProMotion, EEVEE, Cycles Metal, and iPadOS work. The old 5.1 desktop-input patch is retained in this repository only as history; applying it wholesale would overwrite newer implementations.
+- The public head currently places three Objective-C pointer methods inside `generateUserInputEvents`; the compatibility patch restores their valid position.
+- The public setup script checks for Python 3.11 and its bundle script removes `bl_pkg`. This branch instead supplies Python 3.13 and keeps the extension manager.
+- Core USD is enabled because the iOS bundle contains the monolithic USD library and runtime data. Hydra remains separate and unavailable because the required rendering backend is absent.
 
-## Known risks
+## License
 
-- Launch behaviour, rendering, keyboard/mouse input, and Files access still require testing on the target iPad after signing a complete build.
-- The iOS branch is experimental and development was paused. Some normal Blender functions are absent or unstable.
-- The keyboard/mouse PR predates the iOS branch's later Blender 5.1.2 update. Pinning the self-contained PR head gives us a reproducible first build instead of an untested conflict resolution.
-- Extensions, add-ons that spawn processes, clipboard images, audio, and some import/export paths may not work.
-- Removing the restricted increased-memory entitlement improves sideload compatibility but imposes iPadOS's normal per-app memory limit.
-- The unsigned IPA is a build artifact, not an installable release.
-
-## Upstream
-
-- Blender source: <https://projects.blender.org/blender/blender>
-- iOS tracking issue: <https://projects.blender.org/blender/blender/issues/142346>
-- Hardware keyboard PR: <https://projects.blender.org/blender/blender/pulls/145484>
-
-Blender is GPL-licensed. Any distributed modified Blender binary must be accompanied by the corresponding source and GPL notices.
+Blender is GPL-licensed. Any distributed modified binary must be accompanied by the corresponding source, this compatibility patch, and the applicable notices.

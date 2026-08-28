@@ -4,13 +4,15 @@ set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HARNESS_DIR="$(dirname "$SCRIPT_DIR")"
-INPUT_PATCH="$HARNESS_DIR/patches/ios-desktop-input.patch"
+IOS_PATCH="$HARNESS_DIR/patches/ios-5.2-m4-full.patch"
 
 SOURCE_DIR="${1:-$PWD/work/blender}"
-UPSTREAM_URL="${BLENDER_UPSTREAM_URL:-https://projects.blender.org/blender/blender.git}"
-IOS_5_1_2_SHA="${IOS_5_1_2_SHA:-a1de44dd54af75a4c8c4a29a5fed2a1334a87446}"
-BLENDER_REF="${BLENDER_REF:-$IOS_5_1_2_SHA}"
-BUNDLE_ID="${BUNDLE_ID:-com.gorillafkngorgeous.blenderipad}"
+UPSTREAM_URL="${BLENDER_UPSTREAM_URL:-https://github.com/salmazov/blender-ios.git}"
+PINNED_BLENDER_REF="2bc556e58e82eb3a801895f2cb1881c0267e5cd5"
+PINNED_IOS_LIB_REF="393201c7c8525941553f6a96e19b909d6b3bfc4f"
+PINNED_MACOS_LIB_REF="a3e20428fb0ab2231903608cdca90301e130dbfc"
+BLENDER_REF="${BLENDER_REF:-$PINNED_BLENDER_REF}"
+BUNDLE_ID="${BUNDLE_ID:-com.gorillafkngorgeous.blenderipad52}"
 
 if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
   echo "This build must run on an Apple-silicon macOS host." >&2
@@ -24,27 +26,26 @@ for command in git git-lfs cmake xcodebuild plutil; do
   fi
 done
 
-if [[ ! -f "$INPUT_PATCH" ]]; then
-  echo "Missing iPadOS desktop input patch: $INPUT_PATCH" >&2
+if [[ ! -f "$IOS_PATCH" ]]; then
+  echo "Missing Blender 5.2 iPad compatibility patch: $IOS_PATCH" >&2
   exit 1
 fi
-
 if [[ -e "$SOURCE_DIR" ]]; then
   echo "Source destination already exists: $SOURCE_DIR" >&2
   exit 1
 fi
-
-if [[ "$BLENDER_REF" != "$IOS_5_1_2_SHA" ]]; then
-  echo "BLENDER_REF must match the verified Blender iOS 5.1.2 revision." >&2
+if [[ "$BLENDER_REF" != "$PINNED_BLENDER_REF" ]]; then
+  echo "BLENDER_REF must match the audited Blender 5.2 iOS revision." >&2
   exit 1
 fi
 
 mkdir -p "$(dirname "$SOURCE_DIR")"
 
-git clone \
+GIT_LFS_SKIP_SMUDGE=1 git clone \
   --filter=blob:none \
   --no-checkout \
-  --branch ios \
+  --single-branch \
+  --branch ios-new \
   --depth 1 \
   "$UPSTREAM_URL" \
   "$SOURCE_DIR"
@@ -54,85 +55,82 @@ git -C "$SOURCE_DIR" fetch --no-tags --depth 1 origin "$BLENDER_REF"
 
 actual_blender_ref="$(git -C "$SOURCE_DIR" rev-parse FETCH_HEAD)"
 if [[ "$actual_blender_ref" != "$BLENDER_REF" ]]; then
-  echo "Pinned Blender iOS 5.1.2 revision mismatch: $actual_blender_ref" >&2
+  echo "Pinned Blender 5.2 revision mismatch: $actual_blender_ref" >&2
   exit 1
 fi
 
 git -C "$SOURCE_DIR" checkout --detach "$actual_blender_ref"
 git -C "$SOURCE_DIR" lfs pull origin
 
-# Add the hardware keyboard and indirect-pointer bridge to the exact pinned
-# 5.1.2 source. Refuse to build if the patch no longer applies cleanly.
-git -C "$SOURCE_DIR" apply --check "$INPUT_PATCH"
-git -C "$SOURCE_DIR" apply "$INPUT_PATCH"
-git -C "$SOURCE_DIR" diff --check
+# These submodules opt out of ordinary updates. --checkout is therefore required.
+GIT_LFS_SKIP_SMUDGE=0 git -C "$SOURCE_DIR" submodule update \
+  --init \
+  --checkout \
+  --depth 1 \
+  lib/ios_arm64 \
+  lib/macos_arm64
 
-input_system="$SOURCE_DIR/intern/ghost/intern/GHOST_SystemIOS.mm"
-input_window="$SOURCE_DIR/intern/ghost/intern/GHOST_WindowIOS.mm"
-input_plist="$SOURCE_DIR/release/ios/Blender.app/Info.plist"
-
-grep -Fq 'GHOST_SystemIOS::handleKeyEvent(void *eventPtr)' "$input_system"
-grep -Fq 'UIEventButtonMask' "$input_window"
-grep -Fq 'allowedScrollTypesMask = UIScrollTypeMaskAll' "$input_window"
-grep -Fq 'UITouchTypeIndirectPointer' "$input_window"
-grep -Fq 'canBecomeFirstResponder' "$input_window"
-/usr/libexec/PlistBuddy \
-  -c "Print :UIApplicationSupportsIndirectInputEvents" \
-  "$input_plist" | grep -Fxq "true"
-
-(
-  cd "$SOURCE_DIR"
-  ./build_files/utils/make_update.py \
-    --no-blender \
-    --use-ios-libraries \
-    --architecture arm64
-)
-
-info_plist="$SOURCE_DIR/release/ios/Blender.app/Info.plist"
-entitlements="$SOURCE_DIR/release/ios/entitlements.plist"
-creator_cmake="$SOURCE_DIR/source/creator/CMakeLists.txt"
-
-/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$info_plist"
-
-if /usr/libexec/PlistBuddy -c "Print :CFBundleDisplayName" "$info_plist" >/dev/null 2>&1; then
-  /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Blender iPad" "$info_plist"
-else
-  /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string Blender iPad" "$info_plist"
+actual_ios_lib_ref="$(git -C "$SOURCE_DIR/lib/ios_arm64" rev-parse HEAD)"
+actual_macos_lib_ref="$(git -C "$SOURCE_DIR/lib/macos_arm64" rev-parse HEAD)"
+if [[ "$actual_ios_lib_ref" != "$PINNED_IOS_LIB_REF" ]]; then
+  echo "Pinned iOS library revision mismatch: $actual_ios_lib_ref" >&2
+  exit 1
 fi
-
-# This entitlement requires a matching Apple provisioning profile. Removing it
-# allows an unsigned artifact to be re-signed by ordinary sideloading tools.
-/usr/libexec/PlistBuddy \
-  -c "Delete :com.apple.developer.kernel.increased-memory-limit" \
-  "$entitlements" >/dev/null 2>&1 || true
-/usr/libexec/PlistBuddy \
-  -c "Delete :com.apple.developer.kernel.increased-memory-limit" \
-  "$info_plist" >/dev/null 2>&1 || true
-
-# Blender's iOS install step normally re-signs bundled libraries with the
-# developer identity from the local macOS keychain. GitHub's unsigned build has
-# no such identity; the complete bundle is signed after the IPA is built.
-# Keep the upstream behavior by default and skip only that block when the cloud
-# build opts in with -DBLENDER_IOS_SKIP_INSTALL_CODESIGN=ON.
-codesign_guard_matches="$(perl -0ne '
-  while (/if\(WITH_APPLE_CROSSPLATFORM\)(?=.{0,1000}codesign)/sg) { $count++ }
-  END { print $count || 0 }
-' "$creator_cmake")"
-
-if [[ "$codesign_guard_matches" != "1" ]]; then
-  echo "Expected one iOS install-time codesign block, found $codesign_guard_matches" >&2
+if [[ "$actual_macos_lib_ref" != "$PINNED_MACOS_LIB_REF" ]]; then
+  echo "Pinned macOS library revision mismatch: $actual_macos_lib_ref" >&2
   exit 1
 fi
 
-perl -0pi -e '
-  s/if\(WITH_APPLE_CROSSPLATFORM\)(?=.{0,1000}codesign)/if(WITH_APPLE_CROSSPLATFORM AND NOT BLENDER_IOS_SKIP_INSTALL_CODESIGN)/s
-' "$creator_cmake"
+git -C "$SOURCE_DIR/lib/ios_arm64" lfs pull
+git -C "$SOURCE_DIR/lib/macos_arm64" lfs pull
 
-grep -Fq \
-  'if(WITH_APPLE_CROSSPLATFORM AND NOT BLENDER_IOS_SKIP_INSTALL_CODESIGN)' \
-  "$creator_cmake"
+# Apply only the audited compatibility delta. The old 5.1 input patch is deliberately not
+# applied wholesale because 5.2 has newer keyboard, Pencil, pointer, and GCMouse code.
+git -C "$SOURCE_DIR" apply --check "$IOS_PATCH"
+git -C "$SOURCE_DIR" apply "$IOS_PATCH"
+git -C "$SOURCE_DIR" diff --check
 
-echo "Prepared Blender iOS 5.1.2 source at $SOURCE_DIR"
-echo "Blender revision: $actual_blender_ref"
-echo "Bundle identifier: $BUNDLE_ID"
-echo "Desktop input patch: $(shasum -a 256 "$INPUT_PATCH" | awk '{print $1}')"
+version_header="$SOURCE_DIR/source/blender/blenkernel/BKE_blender_version.h"
+input_system="$SOURCE_DIR/intern/ghost/intern/GHOST_SystemIOS.mm"
+input_window="$SOURCE_DIR/intern/ghost/intern/GHOST_WindowIOS.mm"
+info_plist="$SOURCE_DIR/release/ios/Blender.app/Info.plist"
+bundle_script="$SOURCE_DIR/release/ios/scripts/copy_bundle_data.sh"
+
+grep -Eq '^#define BLENDER_VERSION +502$' "$version_header"
+grep -Eq '^#define BLENDER_VERSION_PATCH +0$' "$version_header"
+grep -Eq '^#define BLENDER_VERSION_CYCLE +release$' "$version_header"
+grep -Fq 'GHOST_SystemIOS::setPointerButtonState' "$input_system"
+test "$(grep -Fc -- '- (void)pushIndirectPointerCursorEvent' "$input_window")" -eq 1
+method_line="$(grep -n -m1 -- '- (void)pushIndirectPointerCursorEvent' "$input_window" | cut -d: -f1)"
+generator_line="$(grep -n -m1 -- '- (void)generateUserInputEvents' "$input_window" | cut -d: -f1)"
+test "$method_line" -lt "$generator_line"
+grep -Fq 'physical_memory >= (12ull * 1024ull * 1024ull * 1024ull)' \
+  "$SOURCE_DIR/source/blender/gpu/metal/mtl_backend.mm"
+test -d "$SOURCE_DIR/scripts/addons_core/bl_pkg"
+if grep -Fq 'Removing bl_pkg addon' "$bundle_script"; then
+  echo "The extension manager would be removed from the app bundle." >&2
+  exit 1
+fi
+/usr/libexec/PlistBuddy -c 'Print :UIApplicationSupportsIndirectInputEvents' "$info_plist" | \
+  grep -Fxq true
+
+if /usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$info_plist" >/dev/null 2>&1; then
+  /usr/libexec/PlistBuddy -c 'Set :CFBundleDisplayName Blender 5.2 iPad' "$info_plist"
+else
+  /usr/libexec/PlistBuddy -c 'Add :CFBundleDisplayName string Blender 5.2 iPad' "$info_plist"
+fi
+
+# Preserve the increased-memory entitlement in source. A separately packaged Signulous fallback
+# strips it only from that copy; the M4/full-memory artifact remains unthrottled.
+/usr/libexec/PlistBuddy \
+  -c 'Print :com.apple.developer.kernel.increased-memory-limit' \
+  "$SOURCE_DIR/release/ios/entitlements.plist" | grep -Fxq true
+
+cat <<EOF
+Prepared Blender 5.2 LTS iPad source.
+Blender revision: $actual_blender_ref
+iOS libraries: $actual_ios_lib_ref
+macOS host libraries: $actual_macos_lib_ref
+Bundle identifier: $BUNDLE_ID
+Compatibility patch SHA-256: $(shasum -a 256 "$IOS_PATCH" | awk '{print $1}')
+EOF
