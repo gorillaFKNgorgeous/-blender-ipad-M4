@@ -49,6 +49,21 @@ index bdf0202c207e28883d2aa9686675ffa033bdc1e2..d41b31f8459906b5dc9b4e46cc527f0f
    set(WITH_OPENCOLLADA OFF CACHE BOOL ${NO_PLATFORM_SUPPORT_MSG} FORCE)
    set(WITH_OPENMP OFF CACHE BOOL ${NO_PLATFORM_SUPPORT_MSG} FORCE)
    set(WITH_HARU OFF CACHE BOOL ${NO_PLATFORM_SUPPORT_MSG} FORCE)
+@@ -67,12 +63,12 @@ if(WITH_APPLE_CROSSPLATFORM)
+     else()
+       if(CACHE_VAR_TYPE STREQUAL "BOOL")
+         # Remove IPAD arg
+-        if(NOT CACHE_VAR STREQUAL "APPLE_TARGET_DEVICE" AND NOT CACHE_VAR STREQUAL "WITH_CROSSCOMPILED_TOOLS" AND NOT CACHE_VAR STREQUAL "WITH_APPLE_CROSSPLATFORM" AND NOT CACHE_VAR STREQUAL "WITH_DRACO" AND NOT CACHE_VAR STREQUAL "WITH_MESHOPTIMIZER")
++        if(NOT CACHE_VAR STREQUAL "APPLE_TARGET_DEVICE" AND NOT CACHE_VAR STREQUAL "WITH_CROSSCOMPILED_TOOLS" AND NOT CACHE_VAR STREQUAL "WITH_APPLE_CROSSPLATFORM" AND NOT CACHE_VAR STREQUAL "WITH_DRACO" AND NOT CACHE_VAR STREQUAL "WITH_MESHOPTIMIZER" AND NOT CACHE_VAR STREQUAL "WITH_OPENAL")
+           set(CMAKE_ARGS "${CMAKE_ARGS} -D${CACHE_VAR}=${${CACHE_VAR}}")
+         else()
+           # Disable iPad for tools compilation.
+           # Host tools (makesdna, makesrna, datatoc, shader_tool) never need
+-          # draco/meshoptimizer, and the macos_arm64 prebuilt libs may not have them.
++          # draco, meshoptimizer, or OpenAL, and the macos_arm64 prebuilt libs may not have them.
+           set(CMAKE_ARGS "${CMAKE_ARGS} -D${CACHE_VAR}=OFF")
+         endif()
+       endif()
 @@ -217,17 +213,18 @@ if(NOT WITH_APPLE_CROSSPLATFORM)
    endif()
 

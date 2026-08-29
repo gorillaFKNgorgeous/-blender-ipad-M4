@@ -718,6 +718,10 @@ jobs:
             -DWITH_XR_OPENXR=OFF \
             2>&1 | tee "$GITHUB_WORKSPACE/cmake-configure.log"
 
+          grep -Fx 'WITH_OPENAL:BOOL=ON' "$BUILD_DIR/CMakeCache.txt" >/dev/null
+          grep -F -- '-DWITH_OPENAL=OFF' "$GITHUB_WORKSPACE/cmake-configure.log" >/dev/null
+          echo "Verified OpenAL is enabled for the iOS app and disabled only for host tools"
+
           xcodebuild -project "$BUILD_DIR/Blender.xcodeproj" -list
           bash ./scripts/write-feature-manifest.sh \
             "$BUILD_DIR/CMakeCache.txt" \
