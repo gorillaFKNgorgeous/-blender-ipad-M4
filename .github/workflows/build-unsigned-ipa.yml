@@ -60,18 +60,6 @@ jobs:
           sysctl -n hw.ncpu
           df -h
 
-      - name: Install iOS build dependencies
-        shell: bash
-        run: |
-          brew install libffi
-          LIBFFI_PREFIX="$(brew --prefix libffi)"
-          echo "LDFLAGS=-L${LIBFFI_PREFIX}/lib" >> "$GITHUB_ENV"
-          echo "CPPFLAGS=-I${LIBFFI_PREFIX}/include" >> "$GITHUB_ENV"
-          echo "PKG_CONFIG_PATH=${LIBFFI_PREFIX}/lib/pkgconfig" >> "$GITHUB_ENV"
-          echo "libffi prefix: ${LIBFFI_PREFIX}"
-          ls -la "${LIBFFI_PREFIX}/include"
-          ls -la "${LIBFFI_PREFIX}/lib"
-
       - name: Prepare pinned Blender 5.2 iOS source and libraries
         run: bash ./scripts/prepare-source.sh "$SOURCE_DIR"
 
@@ -182,6 +170,23 @@ jobs:
               external_meshoptimizer \
             --parallel 3 \
             2>&1 | tee "$GITHUB_WORKSPACE/bootstrap-build.log"
+
+          # CPython must consume the just-built iOS libffi, never Homebrew's macOS libffi.
+          ios_libffi="$deps_build/Release/ffi/lib/libffi.a"
+          echo "Checking iOS libffi availability..."
+          if [[ ! -f "$ios_libffi" ]]; then
+            echo "::error::iOS libffi.a not found at expected location: $ios_libffi"
+            exit 1
+          fi
+          echo "Verifying architecture..."
+          xcrun lipo -info "$ios_libffi"
+          echo "Checking for Homebrew contamination..."
+          if env | grep -E '^(LDFLAGS|CPPFLAGS|PKG_CONFIG_PATH)=' | grep -F '/opt/homebrew'; then
+            echo "::error::Homebrew target-library contamination detected in environment"
+            env | grep -E '^(LDFLAGS|CPPFLAGS|PKG_CONFIG_PATH)=' || true
+            exit 1
+          fi
+          echo "iOS libffi isolation verified"
 
           python_package="$deps_build/packages/Python-3.13.13.tar.xz"
           test -f "$python_package"
