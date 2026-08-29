@@ -623,6 +623,57 @@ jobs:
           require_dir "$python_root/lib/python3.13"
           require_absent_file "$python_root/lib/libpython3.11.a"
 
+          python_linkage_audit="$GITHUB_WORKSPACE/ios-python-linkage-audit.txt"
+          : > "$python_linkage_audit"
+          python_311_linkage_found=0
+          python_linkage_found=0
+          while IFS= read -r -d '' candidate; do
+            path_is_python_311=0
+            if grep -Eiq 'python3[.]11|cpython-311' <<< "$candidate"; then
+              path_is_python_311=1
+            fi
+
+            python_loads="$(
+              otool -L "$candidate" 2>/dev/null | sed -n '2,$p' | \
+                grep -i 'python' || true
+            )"
+            if [[ -z "$python_loads" && "$path_is_python_311" -eq 0 ]]; then
+              continue
+            fi
+
+            python_linkage_found=1
+            {
+              printf 'Binary: %s\n' "$candidate"
+              if [[ -n "$python_loads" ]]; then
+                printf '%s\n' "$python_loads"
+              else
+                printf '%s\n' '(filename identifies a CPython 3.11 extension)'
+              fi
+              printf '\n'
+            } | tee -a "$python_linkage_audit"
+
+            if [[ "$path_is_python_311" -ne 0 ]] || \
+              grep -Eiq 'python3[.]11|Python[.]framework/Versions/3[.]11|cpython-311' \
+                <<< "$python_loads"
+            then
+              python_311_linkage_found=1
+            fi
+          done < <(
+            find "$SOURCE_DIR/lib/ios_arm64" \
+              \( -type f -o -type l \) \
+              \( -name '*.dylib' -o -name '*.dylib.*' -o -name '*.so' \) \
+              -print0
+          )
+          if [[ "$python_linkage_found" -eq 0 ]]; then
+            echo "No Python load commands or CPython-tagged extensions found in inherited iOS shared binaries." | \
+              tee -a "$python_linkage_audit"
+          fi
+          if [[ "$python_311_linkage_found" -ne 0 ]]; then
+            echo "::error::Inherited iOS shared binaries reference Python 3.11; see $python_linkage_audit"
+            exit 1
+          fi
+          echo "Verified no inherited iOS shared binary references Python 3.11"
+
           numpy_extension="$(find "$python_site_packages/numpy" -type f -name '*.so' -print -quit)"
           zstandard_extension="$(find "$python_site_packages/zstandard" -type f -name '*.so' -print -quit)"
           require_nonempty "NumPy iOS extension" "$numpy_extension"
@@ -826,6 +877,7 @@ jobs:
             numpy-ios-build.log
             zstandard-ios-build.log
             ios-dependency-verification.log
+            ios-python-linkage-audit.txt
             work/python-host-3.13.13/config.log
             work/python-ios-3.13.13/config.log
             work/deps-ios-bootstrap/build/*/src/*/config.log
