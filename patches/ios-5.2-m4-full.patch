@@ -1,17 +1,20 @@
 diff --git a/build_files/build_environment/cmake/options.cmake b/build_files/build_environment/cmake/options.cmake
-index d2a5ce53c22..846a36f854a 100644
+index d2a5ce53c22..f43d7be36b1 100644
 --- a/build_files/build_environment/cmake/options.cmake
 +++ b/build_files/build_environment/cmake/options.cmake
-@@ -246,6 +246,7 @@ else()
+@@ -246,6 +246,10 @@ else()
      set(PLATFORM_LDFLAGS "-isysroot ${CMAKE_OSX_SYSROOT} -mmacosx-version-min=${CMAKE_OSX_DEPLOYMENT_TARGET} -arch ${CMAKE_OSX_ARCHITECTURES} -headerpad_max_install_names")
      if("${CMAKE_OSX_ARCHITECTURES}" STREQUAL "x86_64")
        set(PLATFORM_BUILD_TARGET --build=x86_64-apple-darwin19.0.0) # OS X 10.15
++    else()
++      set(PLATFORM_BUILD_TARGET --build=aarch64-apple-darwin20.0.0) # macOS 11.00
 +    endif()
++
      if(WITH_APPLE_CROSSPLATFORM)
        # All Apple platform-specific settings - some may be redundant.
        set (CMAKE_SHARED_LIBRARY_PREFIX "lib")
 diff --git a/build_files/cmake/platform/platform_apple.cmake b/build_files/cmake/platform/platform_apple.cmake
-index bdf0202c207e28883d2aa9686675ffa033bdc1e2..dc0480798375d987c326036334ce21b4e53e23fd 100644
+index bdf0202c207e28883d2aa9686675ffa033bdc1e2..d41b31f8459906b5dc9b4e46cc527f0f4114248a 100644
 --- a/build_files/cmake/platform/platform_apple.cmake
 +++ b/build_files/cmake/platform/platform_apple.cmake
 @@ -25,8 +25,8 @@ endfunction()
@@ -25,10 +28,10 @@ index bdf0202c207e28883d2aa9686675ffa033bdc1e2..dc0480798375d987c326036334ce21b4
    set(NO_PLATFORM_SUPPORT_MSG "Auto disabled as APPLE_TARGET_DEVICE=ios")
    set(WITH_VULKAN_BACKEND  OFF CACHE BOOL ${NO_PLATFORM_SUPPORT_MSG} FORCE)
    set(WITH_OPENGL_BACKEND  OFF CACHE BOOL ${NO_PLATFORM_SUPPORT_MSG} FORCE)
-@@ -35,9 +35,8 @@ if(WITH_APPLE_CROSSPLATFORM)
+@@ -35,9 +35,7 @@ if(WITH_APPLE_CROSSPLATFORM)
    set(WITH_PYTHON_MODULE OFF CACHE BOOL ${NO_PLATFORM_SUPPORT_MSG} FORCE)
    # Disable these modules for now
-   set(WITH_PYTHON_INSTALL_ZSTANDARD OFF CACHE BOOL "Disable until iOS build supports SSL" FORCE)
+-  set(WITH_PYTHON_INSTALL_ZSTANDARD OFF CACHE BOOL "Disable until iOS build supports SSL" FORCE)
 -  # Disable Audaspace as it had dependencies on CoreAudio components which do not exist on iOS
 -  # (like AudioToolbox/CoreAudioClock.h)
 -  set(WITH_AUDASPACE OFF CACHE BOOL "Auto disabled due to lack of specific CoreAudio support on iOS" FORCE)
@@ -46,6 +49,35 @@ index bdf0202c207e28883d2aa9686675ffa033bdc1e2..dc0480798375d987c326036334ce21b4
    set(WITH_OPENCOLLADA OFF CACHE BOOL ${NO_PLATFORM_SUPPORT_MSG} FORCE)
    set(WITH_OPENMP OFF CACHE BOOL ${NO_PLATFORM_SUPPORT_MSG} FORCE)
    set(WITH_HARU OFF CACHE BOOL ${NO_PLATFORM_SUPPORT_MSG} FORCE)
+@@ -217,17 +213,18 @@ if(NOT WITH_APPLE_CROSSPLATFORM)
+   endif()
+
+ else()
+-  # When building for iOS we use the MacOS version of Python from the macos libs dir.
+-  # Always auto-detect the host Python executable from macOS libs, regardless of the
+-  # cached PYTHON_VERSION (which reflects the iOS libs and may differ).
+-  set(CROSSCOMPILE_HOST_LIBDIR "${CMAKE_SOURCE_DIR}/lib/macos_arm64")
+-  file(GLOB _host_python_bin "${CROSSCOMPILE_HOST_LIBDIR}/python/bin/python3.*")
+-  if(_host_python_bin)
+-    list(GET _host_python_bin 0 PYTHON_EXECUTABLE)
+-  else()
+-    message(FATAL_ERROR "No python3.* found in ${CROSSCOMPILE_HOST_LIBDIR}/python/bin/")
++  # Use an explicitly supplied native interpreter when one is available. Otherwise retain
++  # the precompiled macOS-library fallback used by the public iOS build.
++  if(NOT PYTHON_EXECUTABLE)
++    set(CROSSCOMPILE_HOST_LIBDIR "${CMAKE_SOURCE_DIR}/lib/macos_arm64")
++    file(GLOB _host_python_bin "${CROSSCOMPILE_HOST_LIBDIR}/python/bin/python3.*")
++    if(_host_python_bin)
++      list(GET _host_python_bin 0 PYTHON_EXECUTABLE)
++    else()
++      message(FATAL_ERROR "No python3.* found in ${CROSSCOMPILE_HOST_LIBDIR}/python/bin/")
++    endif()
++    unset(_host_python_bin)
+   endif()
+-  unset(_host_python_bin)
+   if(NOT EXISTS ${PYTHON_EXECUTABLE})
+     message(
+       FATAL_ERROR
 diff --git a/intern/ghost/intern/GHOST_SystemIOS.hh b/intern/ghost/intern/GHOST_SystemIOS.hh
 index d9268f0108fac89d5b6c8fd575c392942078c439..eb12750cefc17eb7c624c91aa1655d3b1c71b095 100644
 --- a/intern/ghost/intern/GHOST_SystemIOS.hh
@@ -53,23 +85,23 @@ index d9268f0108fac89d5b6c8fd575c392942078c439..eb12750cefc17eb7c624c91aa1655d3b
 @@ -209,6 +209,9 @@ class GHOST_SystemIOS : public GHOST_System {
     */
    GHOST_TSuccess getButtons(GHOST_Buttons &buttons) const override;
- 
+
 +  /** Keep asynchronous indirect-pointer events and queried button state in sync. */
 +  void setPointerButtonState(GHOST_TButton button, bool down);
 +
    GHOST_TCapabilityFlag getCapabilities() const override;
- 
+
    /**
 @@ -357,6 +360,9 @@ class GHOST_SystemIOS : public GHOST_System {
    /** State of the modifiers. */
    uint32_t m_modifierMask;
- 
+
 +  /** State of mouse/trackpad buttons, indexed by #GHOST_TButton. */
 +  uint32_t m_pointerButtonMask;
 +
    /** Ignores window size messages (when window is dragged). */
    bool m_ignoreWindowSizedMessages;
- 
+
 diff --git a/intern/ghost/intern/GHOST_SystemIOS.mm b/intern/ghost/intern/GHOST_SystemIOS.mm
 index 95d66769731ac08974cb7ae23f99d4ca586135c9..625fc02948ad2bbb3fc97d9cb0665a780bde7ab8 100644
 --- a/intern/ghost/intern/GHOST_SystemIOS.mm
@@ -81,11 +113,11 @@ index 95d66769731ac08974cb7ae23f99d4ca586135c9..625fc02948ad2bbb3fc97d9cb0665a78
 +  m_pointerButtonMask = 0;
    m_outsideLoopEventProcessed = false;
    m_needDelayedApplicationBecomeActiveEventProcessing = false;
- 
+
 @@ -498,11 +499,25 @@ void GHOST_SystemIOS::setModifierKey(GHOST_TModifierKey modifier, bool down)
    }
  }
- 
+
 -GHOST_TSuccess GHOST_SystemIOS::getButtons(GHOST_Buttons & /*buttons*/) const
 +GHOST_TSuccess GHOST_SystemIOS::getButtons(GHOST_Buttons &buttons) const
  {
@@ -117,7 +149,7 @@ index c83a14fb3502ab91530143baa6310c84e6358032..f22a48623fa86cd1b981e9017616ed7b
 @@ -456,6 +456,40 @@ typedef struct UserInputEvent {
    }
  }
- 
+
 +- (void)pushIndirectPointerCursorEvent
 +{
 +  system->pushEvent(std::make_unique<GHOST_EventCursor>(system->getMilliSeconds(),
@@ -192,7 +224,7 @@ index c83a14fb3502ab91530143baa6310c84e6358032..f22a48623fa86cd1b981e9017616ed7b
 -                  }
                      event_info.location.x,
                      event_info.location.y);
- 
+
 diff --git a/release/ios/Blender.app/Info.plist b/release/ios/Blender.app/Info.plist
 index c17150712ad335e8ba6c121334f8e90c7e38a07f..16e79b4537821a152ae86b93f57e4df0a8ce4c3d 100644
 --- a/release/ios/Blender.app/Info.plist
@@ -207,13 +239,22 @@ index c17150712ad335e8ba6c121334f8e90c7e38a07f..16e79b4537821a152ae86b93f57e4df0
  	<false/>
  	<key>UIStatusBarHidden</key>
 diff --git a/release/ios/scripts/copy_bundle_data.sh b/release/ios/scripts/copy_bundle_data.sh
-index 51ba45b97c027f1c4d28b029b0bd6c2349a53382..657555293a4a97de64f720ba04aa6e64486eba8b 100755
+index 51ba45b97c0..2cc8b67929e 100755
 --- a/release/ios/scripts/copy_bundle_data.sh
 +++ b/release/ios/scripts/copy_bundle_data.sh
-@@ -73,12 +73,6 @@ if [ ! -d "$DEST/scripts/addons_core/cycles/source" ]; then
+@@ -27,6 +27,8 @@ BUNDLE_ASSETS="${1:?Missing argument: Assets directory path}"
+ : "${PYTHON_VERSION:?PYTHON_VERSION must be set}"
+
+ DEST="$BUNDLE_ASSETS/$BLENDER_VERSION"
++APP_BUNDLE="$(dirname "$BUNDLE_ASSETS")"
++FRAMEWORKS_DIR="$APP_BUNDLE/Frameworks"
+ mkdir -p "$DEST/datafiles"
+
+ # ── Scripts ──────────────────────────────────────────────────────────
+@@ -73,12 +75,6 @@ if [ ! -d "$DEST/scripts/addons_core/cycles/source" ]; then
    fi
  fi
- 
+
 -# ── Remove addons that require Python >= 3.12 (type alias syntax) ──
 -if [ -d "$DEST/scripts/addons_core/bl_pkg" ]; then
 -  echo "Removing bl_pkg addon (requires Python 3.12+)..."
@@ -223,10 +264,10 @@ index 51ba45b97c027f1c4d28b029b0bd6c2349a53382..657555293a4a97de64f720ba04aa6e64
  # ── Datafiles: fonts, icons, colormanagement, studiolights ──────────
  for subdir in fonts icons colormanagement studiolights cursors; do
    if [ -d "$SRC_DIR/release/datafiles/$subdir" ] && [ ! -d "$DEST/datafiles/$subdir" ]; then
-@@ -109,6 +103,25 @@ if [ -d "$SRC_DIR/assets" ] && [ ! -d "$DEST/datafiles/assets/brushes" ]; then
+@@ -109,6 +105,25 @@ if [ -d "$SRC_DIR/assets" ] && [ ! -d "$DEST/datafiles/assets/brushes" ]; then
      "$SRC_DIR/assets/" "$DEST/datafiles/assets/"
  fi
- 
+
 +# ── USD schemas/plugins and MaterialX libraries ─────────────────────
 +# These are normally installed by source/creator/CMakeLists.txt. The iOS target builds a
 +# directly deployable app instead, so mirror the same runtime data into that bundle.
@@ -249,13 +290,133 @@ index 51ba45b97c027f1c4d28b029b0bd6c2349a53382..657555293a4a97de64f720ba04aa6e64
  # ── Patch OCIO config for iOS (bundled library is v2.4, config is v2.5) ──
  OCIO_CFG="$DEST/datafiles/colormanagement/config.ocio"
  if [ -f "$OCIO_CFG" ]; then
+@@ -138,29 +153,97 @@ if [ ! -d "$DEST/datafiles/locale" ]; then
+   done
+ fi
+
+-# ── Python runtime ──────────────────────────────────────────────────
+-if [ ! -d "$DEST/python/lib/python$PYTHON_VERSION" ]; then
+-  echo "Copying Python runtime..."
+-  mkdir -p "$DEST/python/lib"
+-  rsync -a --exclude='__pycache__' --exclude='test' --exclude='tests' \
+-    --exclude='tkinter' --exclude='idlelib' --exclude='turtle*' \
+-    --exclude='ensurepip' \
+-    --exclude='*.so' --exclude='*.dylib' \
+-    "$LIBDIR/python/lib/python$PYTHON_VERSION/" \
+-    "$DEST/python/lib/python$PYTHON_VERSION/"
+-  if [ -f "$LIBDIR/python/bin/python$PYTHON_VERSION" ]; then
+-    mkdir -p "$DEST/python/bin"
+-    cp -f "$LIBDIR/python/bin/python$PYTHON_VERSION" "$DEST/python/bin/"
+-  fi
++# ── Python runtime, framework, and iOS NumPy extensions ─────────────
++PYTHON_RUNTIME_SRC="$LIBDIR/python/lib/python$PYTHON_VERSION"
++PYTHON_RUNTIME_DEST="$DEST/python/lib/python$PYTHON_VERSION"
++PYTHON_FRAMEWORK_SRC="$LIBDIR/python/Python.framework"
++SITE_PACKAGES_SRC="$PYTHON_RUNTIME_SRC/site-packages"
++SITE_PACKAGES_DEST="$PYTHON_RUNTIME_DEST/site-packages"
++
++test -f "$PYTHON_FRAMEWORK_SRC/Python"
++test -d "$SITE_PACKAGES_SRC/numpy"
++test -d "$SITE_PACKAGES_SRC/zstandard"
++
++echo "Copying Python runtime..."
++mkdir -p "$DEST/python/lib"
++rsync -a --delete --delete-excluded \
++  --exclude='__pycache__' --exclude='test' --exclude='tests' \
++  --exclude='tkinter' --exclude='idlelib' --exclude='turtle*' \
++  --exclude='ensurepip' \
++  --exclude='*.so' --exclude='*.dylib' \
++  "$PYTHON_RUNTIME_SRC/" "$PYTHON_RUNTIME_DEST/"
++
++# The general runtime copy omits native modules. These site packages were built
++# specifically for iOS, so copy them before converting each extension to Apple's
++# required one-binary-per-framework layout.
++mkdir -p "$SITE_PACKAGES_DEST"
++rsync -a --delete --delete-excluded \
++  --exclude='__pycache__' --exclude='test' --exclude='tests' \
++  "$SITE_PACKAGES_SRC/" "$SITE_PACKAGES_DEST/"
++
++echo "Embedding Python.framework..."
++mkdir -p "$FRAMEWORKS_DIR/Python.framework"
++rsync -a --delete "$PYTHON_FRAMEWORK_SRC/" "$FRAMEWORKS_DIR/Python.framework/"
++
++create_extension_plist() {
++  local info_plist="$1"
++  local module_name="$2"
++  local bundle_identifier="$3"
++
++  rm -f "$info_plist"
++  plutil -create xml1 "$info_plist"
++  plutil -insert CFBundleDevelopmentRegion -string en "$info_plist"
++  plutil -insert CFBundleExecutable -string "$module_name" "$info_plist"
++  plutil -insert CFBundleIdentifier -string "$bundle_identifier" "$info_plist"
++  plutil -insert CFBundleInfoDictionaryVersion -string 6.0 "$info_plist"
++  plutil -insert CFBundlePackageType -string APPL "$info_plist"
++  plutil -insert CFBundleShortVersionString -string 1.0 "$info_plist"
++  plutil -insert CFBundleSupportedPlatforms -json '["iPhoneOS"]' "$info_plist"
++  plutil -insert MinimumOSVersion -string "${IPHONEOS_DEPLOYMENT_TARGET:-26.0}" "$info_plist"
++  plutil -insert CFBundleVersion -string 1 "$info_plist"
++}
++
++install_python_extension() {
++  local install_base="$1"
++  local full_extension="$2"
++  local relative_extension="${full_extension#"$APP_BUNDLE"/}"
++  local python_extension="${relative_extension#"$install_base"}"
++  local module_name="${python_extension%%.*}"
++  module_name="${module_name//\//.}"
++  local safe_module_name="${module_name//_/-}"
++  local framework_folder="Frameworks/$module_name.framework"
++  local framework_dir="$APP_BUNDLE/$framework_folder"
++  local framework_binary="$framework_dir/$module_name"
++
++  echo "Creating framework for $relative_extension"
++  mkdir -p "$framework_dir"
++  create_extension_plist \
++    "$framework_dir/Info.plist" \
++    "$module_name" \
++    "${PRODUCT_BUNDLE_IDENTIFIER:-org.blenderfoundation.blender}.$safe_module_name"
++  mv "$full_extension" "$framework_binary"
++  printf '%s\n' "$framework_folder/$module_name" > "${full_extension%.so}.fwork"
++  printf '%s\n' "${relative_extension%.so}.fwork" > "$framework_binary.origin"
++}
++
++while IFS= read -r -d '' python_extension; do
++  install_python_extension \
++    "Assets/$BLENDER_VERSION/python/lib/python$PYTHON_VERSION/site-packages/" \
++    "$python_extension"
++done < <(find "$SITE_PACKAGES_DEST" -type f -name '*.so' -print0)
++
++UNCONVERTED_EXTENSION="$(find "$APP_BUNDLE" -type f -name '*.so' -print -quit)"
++if [ -n "$UNCONVERTED_EXTENSION" ]; then
++  echo "Unconverted Python extension remains outside Frameworks: $UNCONVERTED_EXTENSION" >&2
++  exit 1
+ fi
+
+-# ── Clean macOS native extensions from site-packages (wrong platform) ──
+-if [ -d "$DEST/python/lib/python$PYTHON_VERSION/site-packages" ]; then
+-  REMOVED=$(find "$DEST/python/lib/python$PYTHON_VERSION/site-packages" \
+-    \( -name '*.so' -o -name '*.dylib' \) -delete -print 2>/dev/null | wc -l)
+-  if [ "$REMOVED" -gt 0 ]; then
+-    echo "Removed $REMOVED macOS native extensions from site-packages."
+-  fi
+-fi
++echo "Signing embedded Python frameworks..."
++SIGNING_IDENTITY="${EXPANDED_CODE_SIGN_IDENTITY:--}"
++for framework in "$FRAMEWORKS_DIR"/*.framework; do
++  [ -d "$framework" ] || continue
++  codesign --force --sign "$SIGNING_IDENTITY" --timestamp=none "$framework"
++  codesign --verify --strict "$framework"
++done
+
+ echo "Bundle data files ready."
 diff --git a/source/blender/gpu/metal/mtl_backend.mm b/source/blender/gpu/metal/mtl_backend.mm
 index 200f3c5b19903d8d4319a70ea28840d684c3f72f..c05dea8ac700cda3aa10ed29bf2af4f3f62ee18d 100644
 --- a/source/blender/gpu/metal/mtl_backend.mm
 +++ b/source/blender/gpu/metal/mtl_backend.mm
 @@ -539,10 +539,22 @@ void MTLBackend::capabilities_init(MTLContext *ctx)
    GCaps.geometry_shader_support = false;
- 
+
  #ifdef WITH_APPLE_CROSSPLATFORM
 -  /* TODO(iOS IOS-002): Unlimited concurrent Metal shader compilation triggers jetsam on older
 -   * iPads. Fixed cap for now; should be dynamic based on thermal + memory state. See
@@ -281,54 +442,16 @@ index 200f3c5b19903d8d4319a70ea28840d684c3f72f..c05dea8ac700cda3aa10ed29bf2af4f3
    /* Compile shaders on performance cores but leave one free so UI is still responsive.
     * Also respect command line option to reduce number of threads. */
 diff --git a/build_files/build_environment/cmake/python.cmake b/build_files/build_environment/cmake/python.cmake
-index 85df4481ec4..11111111111 100644
+index 85df4481ec4..3b9541bc564 100644
 --- a/build_files/build_environment/cmake/python.cmake
 +++ b/build_files/build_environment/cmake/python.cmake
-@@ -147,7 +147,12 @@
-     if("${CMAKE_OSX_ARCHITECTURES}" STREQUAL "arm64")
-       set(PYTHON_FUNC_CONFIGS ${PYTHON_FUNC_CONFIGS} && export PYTHON_DECIMAL_WITH_MACHINE=ansi64)
-     endif()
--    set(PYTHON_CONFIGURE_ENV ${CONFIGURE_ENV} && ${PYTHON_FUNC_CONFIGS})
-+    if(WITH_APPLE_CROSSPLATFORM)
-+      # Python 3.13 probes SDKROOT via xcrun --show-sdk-path (MacOSX). Use iOS sysroot.
-+      set(PYTHON_CONFIGURE_ENV ${CONFIGURE_ENV} && export SDKROOT=${CMAKE_OSX_SYSROOT} && ${PYTHON_FUNC_CONFIGS})
-+    else()
-+      set(PYTHON_CONFIGURE_ENV ${CONFIGURE_ENV} && ${PYTHON_FUNC_CONFIGS})
-+    endif()
-   else()
-     set(PYTHON_CONFIGURE_ENV ${CONFIGURE_ENV})
-   endif()
-@@ -172,7 +177,8 @@
-   # `ffi`, `sqlite`, `ssl`, `bzip2`, `lzma` and `zlib`.
-   # Using pkg-config is only supported for some, and even then we need to work around issues.
-   set(PYTHON_CONFIGURE_EXTRA_ARGS --with-openssl=${LIBDIR}/ssl)
--  set(PYTHON_CFLAGS "-I${LIBDIR}/sqlite/include -I${LIBDIR}/bzip2/include -I${LIBDIR}/lzma/include -I${LIBDIR}/zlib/include -I${LIBDIR}/libb2/include ${PLATFORM_CFLAGS} ${PYTHON_IOS_CFLAGS}")
-+  # Prefer built libffi 3.5.2 headers over MacOSX.sdk ffi.h (unavailable on iOS).
-+  set(PYTHON_CFLAGS "-I${LIBDIR}/ffi/include -I${LIBDIR}/sqlite/include -I${LIBDIR}/bzip2/include -I${LIBDIR}/lzma/include -I${LIBDIR}/zlib/include -I${LIBDIR}/libb2/include ${PLATFORM_CFLAGS} ${PYTHON_IOS_CFLAGS}")
-   # Manually specify some library paths. For ffi there is no other way, for sqlite is needed because
-   # LIBSQLITE3_LIBS does not work, and ssl because it uses the wrong ssl/lib dir instead of ssl/lib64.
-   set(PYTHON_LDFLAGS "-L${LIBDIR}/ffi/lib -L${LIBDIR}/sqlite/lib -L${LIBDIR}/bzip2/lib -L${LIBDIR}/lzma/lib -L${LIBDIR}/zlib/lib -L${LIBDIR}/ssl/lib -L${LIBDIR}/ssl/lib64 -L${LIBDIR}/libb2/lib ${PLATFORM_LDFLAGS}")
-@@ -193,9 +199,9 @@
-   endif()
- 
-   set(PYTHON_CONFIGURE_EXTRA_ENV
--    export CFLAGS=${PYTHON_CFLAGS} &&
--    export CPPFLAGS=${PYTHON_CFLAGS} &&
--    export LDFLAGS=${PYTHON_LDFLAGS} &&
-+    export CFLAGS=\"${PYTHON_CFLAGS}\" &&
-+    export CPPFLAGS=\"${PYTHON_CFLAGS}\" &&
-+    export LDFLAGS=\"${PYTHON_LDFLAGS}\" &&
- 
-     # Use pkg-config for libraries that support it, and ensure that it used static libraries.
-     export PKG_CONFIG=pkg-config\ --static
-@@ -230,6 +236,9 @@
+@@ -230,6 +230,8 @@
        export LIBSQLITE3_LIBS=${LIBDIR}/sqlite/lib/${LIBPREFIX}sqlite3${LIBEXT}
        export ZLIB_CFLAGS=-I${LIBDIR}/zlib/include
        export ZLIB_LIBS=${LIBDIR}/zlib/lib/${ZLIB_LIBRARY}
-+      && export SDKROOT=${CMAKE_OSX_SYSROOT}
 +    )
 +  endif()
- 
+
    # This patch includes changes to fix missing `-lm` for SQLITE
    # and fix the order of `-ldl` flags for SSL to avoid link errors.
 diff --git a/build_files/build_environment/cmake/sqlite.cmake b/build_files/build_environment/cmake/sqlite.cmake
@@ -370,7 +493,7 @@ index e371d934de2..11111111111 100644
 @@ -98,27 +123,6 @@
    )
  endif()
- 
+
 -ExternalProject_Add(external_sqlite
 -  URL file://${PACKAGE_DIR}/${SQLITE_FILE}
 -  DOWNLOAD_DIR ${DOWNLOAD_DIR}
@@ -413,13 +536,13 @@ index 67f848260e7..11111111111 100644
 +if(EXISTS "${PATCH_DIR}/ffi_apple_clang_17.diff")
 +  set(FFI_PATCH_COMMAND ${FFI_PATCH_COMMAND} && ${PATCH_CMD} -p 1 -d ${BUILD_DIR}/ffi/src/external_ffi < ${PATCH_DIR}/ffi_apple_clang_17.diff)
 +endif()
- 
+
  ExternalProject_Add(external_ffi
    URL file://${PACKAGE_DIR}/${FFI_FILE}
 @@ -73,13 +81,6 @@
      ${FFI_INSTALL}
 -    make install
- 
+
 -  PATCH_COMMAND ${PATCH_CMD} -p 0 -d
 -    ${BUILD_DIR}/ffi/src/external_ffi <
 -    ${FFI_PATCH_FILE} &&
@@ -428,6 +551,6 @@ index 67f848260e7..11111111111 100644
 -    ${BUILD_DIR}/ffi/src/external_ffi <
 -    ${PATCH_DIR}/ffi_apple_clang_17.diff
 +  PATCH_COMMAND ${FFI_PATCH_COMMAND}
- 
+
    INSTALL_DIR ${LIBDIR}/ffi
  )

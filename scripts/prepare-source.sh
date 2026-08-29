@@ -90,20 +90,6 @@ git -C "$SOURCE_DIR" apply --check "$IOS_PATCH"
 git -C "$SOURCE_DIR" apply "$IOS_PATCH"
 git -C "$SOURCE_DIR" diff --check
 
-# Overlay the CPython 3.13-retargeted iOS Python patch. The 5.2 tree still
-# ships a 3.11-era python_ios.diff that rejects against Python-3.13.13.
-PYTHON_IOS_DIFF="$HARNESS_DIR/patches/python_ios-cpython-3.13.diff"
-if [[ ! -f "$PYTHON_IOS_DIFF" ]]; then
-  echo "Missing CPython 3.13 iOS Python patch: $PYTHON_IOS_DIFF" >&2
-  exit 1
-fi
-python_ios_dest="$SOURCE_DIR/build_files/build_environment/patches/python_ios.diff"
-if [[ ! -f "$python_ios_dest" ]]; then
-  echo "Expected python_ios.diff in the Blender 5.2 tree: $python_ios_dest" >&2
-  exit 1
-fi
-cp "$PYTHON_IOS_DIFF" "$python_ios_dest"
-
 version_header="$SOURCE_DIR/source/blender/blenkernel/BKE_blender_version.h"
 input_system="$SOURCE_DIR/intern/ghost/intern/GHOST_SystemIOS.mm"
 input_window="$SOURCE_DIR/intern/ghost/intern/GHOST_WindowIOS.mm"
