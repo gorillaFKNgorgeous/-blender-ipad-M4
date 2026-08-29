@@ -192,12 +192,15 @@ jobs:
           test -f "$python_package"
 
           # CPython requires a build-machine interpreter matching the target version for
-          # freezing modules during a cross-build. Build the exact 3.13.13 release instead
-          # of using the pinned macOS library's older 3.13 micro release.
+          # freezing modules during a cross-build. The outer iOS deployment target is needed
+          # later by cibuildwheel for wheel tagging, but must never retarget this native
+          # build-machine interpreter to iPhoneOS.
           mkdir -p "$host_python_src" "$host_python_prefix"
           tar -xf "$python_package" -C "$host_python_src" --strip-components=1
           (
             cd "$host_python_src"
+            unset IPHONEOS_DEPLOYMENT_TARGET
+            test -z "${IPHONEOS_DEPLOYMENT_TARGET:-}"
             ./configure \
               --prefix="$host_python_prefix" \
               --disable-test-modules \
