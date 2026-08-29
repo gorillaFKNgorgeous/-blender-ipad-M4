@@ -225,8 +225,24 @@ jobs:
               --without-ensurepip \
               --disable-test-modules \
               2>&1 | tee "$GITHUB_WORKSPACE/python-ios-configure.log"
-            make -j3 2>&1 | tee "$GITHUB_WORKSPACE/python-ios-build.log"
-            make install 2>&1 | tee -a "$GITHUB_WORKSPACE/python-ios-build.log"
+
+            # CPython's unversioned Apple framework rule links libpython followed by
+            # $(LIBS), but does not include the per-module *_LIBS configure variables.
+            # Keep the configure-discovered system flags and explicitly supply every
+            # archive needed by the static stdlib modules retained above.
+            python_ios_framework_libs="-ldl -lpthread \
+              $deps_build/Release/ssl/lib/libssl.a \
+              $deps_build/Release/ssl/lib/libcrypto.a \
+              $deps_build/Release/sqlite/lib/libsqlite3.a \
+              $deps_build/Release/zlib/lib/libz.a \
+              $deps_build/Release/bzip2/lib/libbz2.a \
+              $deps_build/Release/lzma/lib/liblzma.a \
+              $deps_build/Release/ffi/lib/libffi.a \
+              $deps_build/Release/libb2/lib/libb2.a"
+            make -j3 LIBS="$python_ios_framework_libs" \
+              2>&1 | tee "$GITHUB_WORKSPACE/python-ios-build.log"
+            make LIBS="$python_ios_framework_libs" install \
+              2>&1 | tee -a "$GITHUB_WORKSPACE/python-ios-build.log"
           )
 
           mkdir -p "$deps_build/Release/python/lib"
