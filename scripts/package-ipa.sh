@@ -81,6 +81,16 @@ test -f "$(find "$app_path/Assets" \
 test -n "$(find "$app_path/Assets" \
   -path '*/python/lib/python3.13/site-packages/zstandard/*.fwork' -print -quit)"
 
+meshoptimizer_dylib="$(find "$app_path/Assets/lib" -type f \
+  -name 'libmeshoptimizer*.dylib*' -print -quit)"
+if [[ -z "$meshoptimizer_dylib" ]]; then
+  echo "Blender.app is missing its bundled meshoptimizer dylib." >&2
+  find "$app_path/Assets/lib" -maxdepth 1 -type f -print >&2 || true
+  exit 1
+fi
+xcrun vtool -show-build "$meshoptimizer_dylib" | grep -F 'platform IOS' >/dev/null
+codesign --verify --strict "$meshoptimizer_dylib"
+
 python_framework_count="$(find "$app_path/Frameworks" -type d -name '*.framework' | wc -l | tr -d ' ')"
 if (( python_framework_count < 2 )); then
   echo "Expected Python.framework and NumPy extension frameworks; found $python_framework_count" >&2
@@ -103,6 +113,7 @@ fi
 file "$app_path/$executable"
 lipo -info "$app_path/$executable" | grep -F arm64 >/dev/null
 otool -L "$app_path/$executable" | grep -F '@rpath/Python.framework/Python' >/dev/null
+otool -L "$app_path/$executable" | grep -F 'libmeshoptimizer' >/dev/null
 otool -l "$app_path/$executable" | grep -F '@executable_path/Frameworks' >/dev/null
 otool -l "$app_path/$executable" | grep -F '@loader_path/Assets/lib' >/dev/null
 xcrun vtool -show-build "$app_path/Frameworks/Python.framework/Python" | \

@@ -53,6 +53,8 @@ jobs:
 
       - name: Check Apple-silicon host tools and capacity
         run: |
+          mkdir -p "$ARTIFACT_DIR"
+          test -d "$ARTIFACT_DIR"
           test "$(uname -m)" = arm64
           uname -a
           cmake --version
@@ -469,70 +471,10 @@ jobs:
               "$SOURCE_DIR/lib/ios_arm64/$dependency/"
           done
 
-      - name: Verify complete iOS dependency layout
-        run: |
-          test -x "$GITHUB_WORKSPACE/work/host-python-3.13.13/bin/python3.13"
-          "$GITHUB_WORKSPACE/work/host-python-3.13.13/bin/python3.13" -c \
-            'import sys; assert sys.version_info[:3] == (3, 13, 13), sys.version'
-          test -f "$SOURCE_DIR/lib/ios_arm64/python/include/python3.13/Python.h"
-          test -f "$SOURCE_DIR/lib/ios_arm64/python/include/python3.13/pyconfig.h"
-          test -f "$SOURCE_DIR/lib/ios_arm64/python/lib/libpython3.13.a"
-          test -f "$SOURCE_DIR/lib/ios_arm64/python/Python.framework/Python"
-          test -d "$SOURCE_DIR/lib/ios_arm64/python/lib/python3.13"
-          test -f "$SOURCE_DIR/lib/ios_arm64/python/lib/python3.13/site-packages/numpy/_core/include/numpy/arrayobject.h"
-          test -n "$(find "$SOURCE_DIR/lib/ios_arm64/python/lib/python3.13/site-packages/numpy" -type f -name '*.so' -print -quit)"
-          test -n "$(find "$SOURCE_DIR/lib/ios_arm64/python/lib/python3.13/site-packages/zstandard" -type f -name '*.so' -print -quit)"
-          test -f "$SOURCE_DIR/lib/ios_arm64/python/lib/python3.13/site-packages/requests/__init__.py"
-          test -f "$SOURCE_DIR/lib/ios_arm64/python/lib/python3.13/site-packages/certifi/cacert.pem"
-          test ! -f "$SOURCE_DIR/lib/ios_arm64/python/lib/libpython3.11.a"
-          test -f "$SOURCE_DIR/lib/ios_arm64/ssl/lib/libssl.a"
-          test -f "$SOURCE_DIR/lib/ios_arm64/ssl/lib/libcrypto.a"
-          test -f "$SOURCE_DIR/lib/ios_arm64/ffi/lib/libffi.a"
-          test -f "$SOURCE_DIR/lib/ios_arm64/sqlite/lib/libsqlite3.a"
-          test -f "$SOURCE_DIR/lib/ios_arm64/zlib/lib/libz.a"
-          test -f "$SOURCE_DIR/lib/ios_arm64/bzip2/lib/libbz2.a"
-          test -f "$SOURCE_DIR/lib/ios_arm64/lzma/lib/liblzma.a"
-          test -n "$(find "$SOURCE_DIR/lib/ios_arm64/draco" -name '*Config.cmake' -print -quit)"
-          test -n "$(find "$SOURCE_DIR/lib/ios_arm64/meshoptimizer" -name '*config.cmake' -print -quit)"
-
-          file "$SOURCE_DIR/lib/ios_arm64/python/lib/libpython3.13.a"
-          python_framework="$SOURCE_DIR/lib/ios_arm64/python/Python.framework/Python"
-          python_framework_build_log="$GITHUB_WORKSPACE/python-ios-framework-build.txt"
-          python_framework_symbols_log="$GITHUB_WORKSPACE/python-ios-framework-symbols.txt"
-          xcrun vtool -show-build "$python_framework" > "$python_framework_build_log"
-          grep -F 'platform IOS' "$python_framework_build_log" >/dev/null
-          nm -gU "$python_framework" > "$python_framework_symbols_log"
-          for required_symbol in _PyInit__ctypes _PyInit__ssl _PyInit__sqlite3; do
-            if ! grep -E "[[:space:]]${required_symbol}$" \
-              "$python_framework_symbols_log" >/dev/null
-            then
-              echo "::error::Python.framework is missing required built-in module symbol: $required_symbol"
-              exit 1
-            fi
-          done
-          while IFS= read -r numpy_extension; do
-            xcrun vtool -show-build "$numpy_extension" | grep -F 'platform IOS' >/dev/null
-            otool -L "$numpy_extension" | grep -F '@rpath/Python.framework/Python' >/dev/null
-          done < <(find "$SOURCE_DIR/lib/ios_arm64/python/lib/python3.13/site-packages/numpy" \
-            -type f -name '*.so' -print)
-          while IFS= read -r zstandard_extension; do
-            xcrun vtool -show-build "$zstandard_extension" | grep -F 'platform IOS' >/dev/null
-            otool -L "$zstandard_extension" | grep -F '@rpath/Python.framework/Python' >/dev/null
-          done < <(find "$SOURCE_DIR/lib/ios_arm64/python/lib/python3.13/site-packages/zstandard" \
-            -type f -name '*.so' -print)
-          find "$SOURCE_DIR/lib/ios_arm64/draco/lib" -type f \( -name '*.a' -o -name '*.dylib' \) -print
-          find "$SOURCE_DIR/lib/ios_arm64/meshoptimizer/lib" -type f \( -name '*.a' -o -name '*.dylib' \) -print
-
-          nm -gU "$SOURCE_DIR/lib/ios_arm64/ssl/lib/libcrypto.a" | \
-            grep -E '[[:space:]]_EVP_MD_CTX_get_size_ex$' >/dev/null
-          nm -gU "$SOURCE_DIR/lib/ios_arm64/ssl/lib/libssl.a" | \
-            grep -E '[[:space:]]_SSL_SESSION_get_time_ex$' >/dev/null
-          nm -gU "$SOURCE_DIR/lib/ios_arm64/ssl/lib/libcrypto.a" | \
-            grep -E '[[:space:]]_X509_STORE_get1_objects$' >/dev/null
-          nm -gU "$SOURCE_DIR/lib/ios_arm64/ffi/lib/libffi.a" | \
-            grep -E '[[:space:]]_ffi_type_longdouble$' >/dev/null
-
-      - name: Save verified dependency cache
+      # The bootstrap build and its internal Python, NumPy, zstandard, and requests
+      # assertions have passed by this point. Save the expensive bundle before aggregate
+      # verification so a diagnostic-only failure does not discard ten minutes of valid work.
+      - name: Save completed dependency bootstrap cache
         if: steps.ios-bootstrap-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
@@ -549,6 +491,177 @@ jobs:
             work/blender/lib/ios_arm64/draco
             work/blender/lib/ios_arm64/meshoptimizer
           key: ios-5.2-bootstrap-${{ runner.os }}-xcode-26.3-${{ env.BLENDER_REF }}-python-3.13.13-numpy-2.3.4-draco-meshopt-v5
+
+
+      - name: Verify complete iOS dependency layout
+        run: |
+          set -euo pipefail
+          exec > >(tee "$GITHUB_WORKSPACE/ios-dependency-verification.log") 2>&1
+
+          require_file() {
+            local path="$1"
+            if [[ ! -f "$path" ]]; then
+              echo "::error::Missing required file: $path"
+              return 1
+            fi
+            echo "Verified file: $path"
+          }
+
+          require_executable() {
+            local path="$1"
+            if [[ ! -x "$path" ]]; then
+              echo "::error::Missing required executable: $path"
+              return 1
+            fi
+            echo "Verified executable: $path"
+          }
+
+          require_dir() {
+            local path="$1"
+            if [[ ! -d "$path" ]]; then
+              echo "::error::Missing required directory: $path"
+              return 1
+            fi
+            echo "Verified directory: $path"
+          }
+
+          require_absent_file() {
+            local path="$1"
+            if [[ -f "$path" ]]; then
+              echo "::error::Forbidden stale file is present: $path"
+              return 1
+            fi
+            echo "Verified absent file: $path"
+          }
+
+          require_nonempty() {
+            local label="$1"
+            local value="$2"
+            if [[ -z "$value" ]]; then
+              echo "::error::$label was not found"
+              return 1
+            fi
+            echo "Verified $label: $value"
+          }
+
+          require_find() {
+            local root="$1"
+            local pattern="$2"
+            local label="$3"
+            local match
+            match="$(find "$root" -iname "$pattern" -print -quit)"
+            if [[ -z "$match" ]]; then
+              echo "::error::$label not found below $root (case-insensitive pattern: $pattern)"
+              echo "Files available below $root:"
+              find "$root" -maxdepth 6 -type f -print | sort
+              return 1
+            fi
+            echo "Verified $label: $match"
+          }
+
+          host_python="$GITHUB_WORKSPACE/work/host-python-3.13.13/bin/python3.13"
+          python_root="$SOURCE_DIR/lib/ios_arm64/python"
+          python_site_packages="$python_root/lib/python3.13/site-packages"
+          require_executable "$host_python"
+          "$host_python" -c \
+            'import sys; assert sys.version_info[:3] == (3, 13, 13), sys.version'
+
+          for required_file in \
+            "$python_root/include/python3.13/Python.h" \
+            "$python_root/include/python3.13/pyconfig.h" \
+            "$python_root/lib/libpython3.13.a" \
+            "$python_root/Python.framework/Python" \
+            "$python_site_packages/numpy/_core/include/numpy/arrayobject.h" \
+            "$python_site_packages/requests/__init__.py" \
+            "$python_site_packages/certifi/cacert.pem" \
+            "$SOURCE_DIR/lib/ios_arm64/ssl/lib/libssl.a" \
+            "$SOURCE_DIR/lib/ios_arm64/ssl/lib/libcrypto.a" \
+            "$SOURCE_DIR/lib/ios_arm64/ffi/lib/libffi.a" \
+            "$SOURCE_DIR/lib/ios_arm64/sqlite/lib/libsqlite3.a" \
+            "$SOURCE_DIR/lib/ios_arm64/zlib/lib/libz.a" \
+            "$SOURCE_DIR/lib/ios_arm64/bzip2/lib/libbz2.a" \
+            "$SOURCE_DIR/lib/ios_arm64/lzma/lib/liblzma.a" \
+            "$SOURCE_DIR/lib/ios_arm64/libb2/lib/libb2.a"
+          do
+            require_file "$required_file"
+          done
+          require_dir "$python_root/lib/python3.13"
+          require_absent_file "$python_root/lib/libpython3.11.a"
+
+          numpy_extension="$(find "$python_site_packages/numpy" -type f -name '*.so' -print -quit)"
+          zstandard_extension="$(find "$python_site_packages/zstandard" -type f -name '*.so' -print -quit)"
+          require_nonempty "NumPy iOS extension" "$numpy_extension"
+          require_nonempty "zstandard iOS extension" "$zstandard_extension"
+
+          # Draco installs draco-config.cmake while meshoptimizer installs
+          # meshoptimizerConfig.cmake. BSD find is case-sensitive with -name even on the
+          # default case-insensitive APFS volume, so both package checks use -iname.
+          require_find "$SOURCE_DIR/lib/ios_arm64/draco" '*config.cmake' \
+            "Draco CMake package config"
+          require_find "$SOURCE_DIR/lib/ios_arm64/meshoptimizer" '*config.cmake' \
+            "meshoptimizer CMake package config"
+
+          draco_library="$(find "$SOURCE_DIR/lib/ios_arm64/draco/lib" -type f \
+            \( -name '*.a' -o -name '*.dylib' -o -name '*.dylib.*' \) -print -quit)"
+          meshoptimizer_dylib="$(find "$SOURCE_DIR/lib/ios_arm64/meshoptimizer/lib" -type f \
+            -name '*meshoptimizer*.dylib*' -print -quit)"
+          require_nonempty "Draco library" "$draco_library"
+          require_nonempty "meshoptimizer shared library" "$meshoptimizer_dylib"
+
+          file "$python_root/lib/libpython3.13.a"
+          python_framework="$python_root/Python.framework/Python"
+          python_framework_build_log="$GITHUB_WORKSPACE/python-ios-framework-build.txt"
+          python_framework_symbols_log="$GITHUB_WORKSPACE/python-ios-framework-symbols.txt"
+          xcrun vtool -show-build "$python_framework" > "$python_framework_build_log"
+          grep -F 'platform IOS' "$python_framework_build_log" >/dev/null
+          nm -gU "$python_framework" > "$python_framework_symbols_log"
+          for required_symbol in _PyInit__ctypes _PyInit__ssl _PyInit__sqlite3; do
+            if ! grep -E "[[:space:]]${required_symbol}$" \
+              "$python_framework_symbols_log" >/dev/null
+            then
+              echo "::error::Python.framework is missing required built-in module symbol: $required_symbol"
+              exit 1
+            fi
+            echo "Verified Python.framework symbol: $required_symbol"
+          done
+
+          while IFS= read -r python_extension; do
+            echo "Verifying iOS Python extension: $python_extension"
+            xcrun vtool -show-build "$python_extension" | grep -F 'platform IOS' >/dev/null
+            otool -L "$python_extension" | grep -F '@rpath/Python.framework/Python' >/dev/null
+          done < <(find "$python_site_packages/numpy" "$python_site_packages/zstandard" \
+            -type f -name '*.so' -print)
+
+          while IFS= read -r dependency_dylib; do
+            echo "Verifying iOS dependency dylib: $dependency_dylib"
+            xcrun vtool -show-build "$dependency_dylib" | grep -F 'platform IOS' >/dev/null
+            if otool -L "$dependency_dylib" | sed -n '2,$p' | \
+              grep -E '/opt/homebrew|/Users/runner|MacOSX\.sdk' >/dev/null
+            then
+              echo "::error::iOS dependency contains a host-only linkage: $dependency_dylib"
+              otool -L "$dependency_dylib"
+              exit 1
+            fi
+          done < <(find \
+            "$SOURCE_DIR/lib/ios_arm64/draco/lib" \
+            "$SOURCE_DIR/lib/ios_arm64/meshoptimizer/lib" \
+            -type f \( -name '*.dylib' -o -name '*.dylib.*' \) -print)
+
+          echo "Discovered Draco and meshoptimizer libraries:"
+          find \
+            "$SOURCE_DIR/lib/ios_arm64/draco/lib" \
+            "$SOURCE_DIR/lib/ios_arm64/meshoptimizer/lib" \
+            -type f \( -name '*.a' -o -name '*.dylib' -o -name '*.dylib.*' \) -print | sort
+
+          nm -gU "$SOURCE_DIR/lib/ios_arm64/ssl/lib/libcrypto.a" | \
+            grep -E '[[:space:]]_EVP_MD_CTX_get_size_ex$' >/dev/null
+          nm -gU "$SOURCE_DIR/lib/ios_arm64/ssl/lib/libssl.a" | \
+            grep -E '[[:space:]]_SSL_SESSION_get_time_ex$' >/dev/null
+          nm -gU "$SOURCE_DIR/lib/ios_arm64/ssl/lib/libcrypto.a" | \
+            grep -E '[[:space:]]_X509_STORE_get1_objects$' >/dev/null
+          nm -gU "$SOURCE_DIR/lib/ios_arm64/ffi/lib/libffi.a" | \
+            grep -E '[[:space:]]_ffi_type_longdouble$' >/dev/null
+          echo "Verified required OpenSSL and libffi symbols"
 
       - name: Configure full Blender 5.2 iPad profile
         run: |
@@ -673,6 +786,7 @@ jobs:
             python-ios-framework-symbols.txt
             numpy-ios-build.log
             zstandard-ios-build.log
+            ios-dependency-verification.log
             work/python-host-3.13.13/config.log
             work/python-ios-3.13.13/config.log
             work/deps-ios-bootstrap/build/*/src/*/config.log
