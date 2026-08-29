@@ -65,6 +65,41 @@ jobs:
       - name: Prepare pinned Blender 5.2 iOS source and libraries
         run: bash ./scripts/prepare-source.sh "$SOURCE_DIR"
 
+      - name: Clear iOS dependency cache overlay targets
+        run: |
+          set -euo pipefail
+          ios_lib_root="$SOURCE_DIR/lib/ios_arm64"
+          test -d "$ios_lib_root"
+
+          # actions/cache restores by overlaying files; it does not delete stale files
+          # already present in the fresh library checkout. Clear only the exact cache
+          # targets so a hit reproduces the saved dependency tree byte-for-byte.
+          for dependency in \
+            python \
+            ssl \
+            ffi \
+            sqlite \
+            zlib \
+            bzip2 \
+            lzma \
+            libb2 \
+            draco \
+            meshoptimizer
+          do
+            target="$ios_lib_root/$dependency"
+            case "$target" in
+              "$ios_lib_root"/*) ;;
+              *)
+                echo "::error::Refusing to clear unexpected cache target: $target"
+                exit 1
+                ;;
+            esac
+            if [[ -e "$target" || -L "$target" ]]; then
+              echo "Clearing cache overlay target: $target"
+              rm -rf -- "$target"
+            fi
+          done
+
       - name: Restore Python 3.13, NumPy, and codec dependency cache
         id: ios-bootstrap-cache
         uses: actions/cache/restore@v4
