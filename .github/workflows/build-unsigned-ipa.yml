@@ -79,7 +79,10 @@ jobs:
             work/blender/lib/ios_arm64/libb2
             work/blender/lib/ios_arm64/draco
             work/blender/lib/ios_arm64/meshoptimizer
-          key: ios-5.2-bootstrap-${{ runner.os }}-xcode-26.3-${{ env.BLENDER_REF }}-python-3.13.13-numpy-2.3.4-draco-meshopt-v3-${{ hashFiles('patches/ios-5.2-m4-full.patch', '.github/workflows/build-unsigned-ipa.yml') }}
+          # Bump this explicit revision only when dependency-bootstrap inputs change.
+          # Keeping it independent of unrelated workflow/app edits lets later Blender
+          # compile fixes reuse the verified native dependency bundle.
+          key: ios-5.2-bootstrap-${{ runner.os }}-xcode-26.3-${{ env.BLENDER_REF }}-python-3.13.13-numpy-2.3.4-draco-meshopt-v4
 
       - name: Install dependency build tools
         if: steps.ios-bootstrap-cache.outputs.cache-hit != 'true'
@@ -272,10 +275,12 @@ jobs:
             export CIBW_BEFORE_TEST=""
             export CIBW_TEST_COMMAND=""
             export CIBW_XBUILD_TOOLS=ninja
+            export CIBW_BUILD_FRONTEND=build
             export CIBW_ENVIRONMENT="RUNNER_OS=macOS RUNNER_ARCH=ARM64 INSTALL_OPENBLAS=false IPHONEOS_DEPLOYMENT_TARGET=26.0"
             export CIBW_CONFIG_SETTINGS="setup-args=-Duse-ilp64=false setup-args=-Dblas=accelerate setup-args=-Dlapack=accelerate setup-args=-Dallow-noblas=false build-dir=build-ios"
             "$host_python_prefix/bin/python3.13" -m cibuildwheel \
               --platform ios \
+              --config-file /dev/null \
               --output-dir "$numpy_wheelhouse" \
               . 2>&1 | tee "$GITHUB_WORKSPACE/numpy-ios-build.log"
           )
@@ -437,7 +442,7 @@ jobs:
             work/blender/lib/ios_arm64/libb2
             work/blender/lib/ios_arm64/draco
             work/blender/lib/ios_arm64/meshoptimizer
-          key: ios-5.2-bootstrap-${{ runner.os }}-xcode-26.3-${{ env.BLENDER_REF }}-python-3.13.13-numpy-2.3.4-draco-meshopt-v3-${{ hashFiles('patches/ios-5.2-m4-full.patch', '.github/workflows/build-unsigned-ipa.yml') }}
+          key: ios-5.2-bootstrap-${{ runner.os }}-xcode-26.3-${{ env.BLENDER_REF }}-python-3.13.13-numpy-2.3.4-draco-meshopt-v4
 
       - name: Configure full Blender 5.2 iPad profile
         run: |
