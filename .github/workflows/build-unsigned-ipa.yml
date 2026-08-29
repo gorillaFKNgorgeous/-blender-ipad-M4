@@ -245,17 +245,46 @@ jobs:
           cp "$ios_python_src/libpython3.13.a" \
             "$deps_build/Release/python/lib/libpython3.13.a"
 
-          test -f "$deps_build/Release/python/Python.framework/Python"
-          test -f "$deps_build/Release/python/include/python3.13/Python.h"
-          test -d "$deps_build/Release/python/lib/python3.13"
-          xcrun vtool -show-build "$deps_build/Release/python/Python.framework/Python" | \
-            grep -F 'platform IOS' >/dev/null
-          nm -gU "$deps_build/Release/python/lib/libpython3.13.a" | \
-            grep -E '[[:space:]]_PyInit__ctypes$' >/dev/null
-          nm -gU "$deps_build/Release/python/lib/libpython3.13.a" | \
-            grep -E '[[:space:]]_PyInit__ssl$' >/dev/null
-          nm -gU "$deps_build/Release/python/lib/libpython3.13.a" | \
-            grep -E '[[:space:]]_PyInit__sqlite3$' >/dev/null
+          python_framework="$deps_build/Release/python/Python.framework/Python"
+          python_static_archive="$deps_build/Release/python/lib/libpython3.13.a"
+          python_framework_build_log="$GITHUB_WORKSPACE/python-ios-framework-build.txt"
+          python_framework_symbols_log="$GITHUB_WORKSPACE/python-ios-framework-symbols.txt"
+          for required_file in \
+            "$python_framework" \
+            "$python_static_archive" \
+            "$deps_build/Release/python/include/python3.13/Python.h"
+          do
+            if [[ ! -f "$required_file" ]]; then
+              echo "::error::CPython install is missing required file: $required_file"
+              exit 1
+            fi
+          done
+          if [[ ! -d "$deps_build/Release/python/lib/python3.13" ]]; then
+            echo "::error::CPython install is missing its Python 3.13 standard library"
+            exit 1
+          fi
+          if ! xcrun vtool -show-build "$python_framework" > "$python_framework_build_log"; then
+            echo "::error::Unable to inspect the installed Python framework Mach-O"
+            exit 1
+          fi
+          if ! grep -F 'platform IOS' "$python_framework_build_log" >/dev/null; then
+            echo "::error::Installed Python framework is not an iOS Mach-O"
+            cat "$python_framework_build_log"
+            exit 1
+          fi
+          if ! nm -gU "$python_framework" > "$python_framework_symbols_log"; then
+            echo "::error::Unable to inspect exported Python framework symbols"
+            exit 1
+          fi
+          for required_symbol in _PyInit__ctypes _PyInit__ssl _PyInit__sqlite3; do
+            if ! grep -E "[[:space:]]${required_symbol}$" \
+              "$python_framework_symbols_log" >/dev/null
+            then
+              echo "::error::Python.framework is missing required built-in module symbol: $required_symbol"
+              exit 1
+            fi
+          done
+          echo "Verified official iOS Python.framework and required built-in modules"
 
           # Build a genuine CPython 3.13 iOS NumPy wheel. Accelerate provides optimized
           # BLAS/LAPACK on Apple silicon without importing a macOS OpenBLAS binary. The
@@ -269,13 +298,27 @@ jobs:
           # (numpy/numpy#28759, commit ec6b2b2626d0fc2b1505f3ffd7905862ebe605f4).
           # Backport the iOS platform fixes, including correct Accelerate symbol
           # mangling, arm64 long-double detection, .fwork loading, and test guards.
-          (
-            cd "$numpy_src"
-            git apply --check "$GITHUB_WORKSPACE/patches/numpy-2.3.4-ios-support.diff"
-            git apply "$GITHUB_WORKSPACE/patches/numpy-2.3.4-ios-support.diff"
-          )
-          grep -F '#include "TargetConditionals.h"' \
+          # The extracted source is nested below this Git worktree. Apply with an
+          # explicit worktree-relative prefix; otherwise `git apply` can report success
+          # while ignoring every patch path outside its inferred current-directory scope.
+          numpy_relative_src="${numpy_src#"$GITHUB_WORKSPACE"/}"
+          if [[ "$numpy_relative_src" == "$numpy_src" ]]; then
+            echo "::error::NumPy source is not below GITHUB_WORKSPACE: $numpy_src"
+            exit 1
+          fi
+          git -C "$GITHUB_WORKSPACE" apply --check \
+            --directory="$numpy_relative_src" \
+            "$GITHUB_WORKSPACE/patches/numpy-2.3.4-ios-support.diff"
+          git -C "$GITHUB_WORKSPACE" apply \
+            --directory="$numpy_relative_src" \
+            "$GITHUB_WORKSPACE/patches/numpy-2.3.4-ios-support.diff"
+          if ! grep -F '#include "TargetConditionals.h"' \
             "$numpy_src/numpy/_core/src/common/npy_cblas.h" >/dev/null
+          then
+            echo "::error::NumPy iOS Accelerate backport was not applied to the extracted source"
+            exit 1
+          fi
+          echo "Applied NumPy 2.3.4 iOS Accelerate and platform support backport"
 
           "$host_python_prefix/bin/python3.13" -m pip install \
             --disable-pip-version-check \
@@ -421,14 +464,20 @@ jobs:
           test -n "$(find "$SOURCE_DIR/lib/ios_arm64/meshoptimizer" -name '*config.cmake' -print -quit)"
 
           file "$SOURCE_DIR/lib/ios_arm64/python/lib/libpython3.13.a"
-          xcrun vtool -show-build "$SOURCE_DIR/lib/ios_arm64/python/Python.framework/Python" | \
-            grep -F 'platform IOS' >/dev/null
-          nm -gU "$SOURCE_DIR/lib/ios_arm64/python/lib/libpython3.13.a" | \
-            grep -E '[[:space:]]_PyInit__ctypes$' >/dev/null
-          nm -gU "$SOURCE_DIR/lib/ios_arm64/python/lib/libpython3.13.a" | \
-            grep -E '[[:space:]]_PyInit__ssl$' >/dev/null
-          nm -gU "$SOURCE_DIR/lib/ios_arm64/python/lib/libpython3.13.a" | \
-            grep -E '[[:space:]]_PyInit__sqlite3$' >/dev/null
+          python_framework="$SOURCE_DIR/lib/ios_arm64/python/Python.framework/Python"
+          python_framework_build_log="$GITHUB_WORKSPACE/python-ios-framework-build.txt"
+          python_framework_symbols_log="$GITHUB_WORKSPACE/python-ios-framework-symbols.txt"
+          xcrun vtool -show-build "$python_framework" > "$python_framework_build_log"
+          grep -F 'platform IOS' "$python_framework_build_log" >/dev/null
+          nm -gU "$python_framework" > "$python_framework_symbols_log"
+          for required_symbol in _PyInit__ctypes _PyInit__ssl _PyInit__sqlite3; do
+            if ! grep -E "[[:space:]]${required_symbol}$" \
+              "$python_framework_symbols_log" >/dev/null
+            then
+              echo "::error::Python.framework is missing required built-in module symbol: $required_symbol"
+              exit 1
+            fi
+          done
           while IFS= read -r numpy_extension; do
             xcrun vtool -show-build "$numpy_extension" | grep -F 'platform IOS' >/dev/null
             otool -L "$numpy_extension" | grep -F '@rpath/Python.framework/Python' >/dev/null
@@ -588,6 +637,8 @@ jobs:
             python-host-build.log
             python-ios-configure.log
             python-ios-build.log
+            python-ios-framework-build.txt
+            python-ios-framework-symbols.txt
             numpy-ios-build.log
             zstandard-ios-build.log
             work/python-host-3.13.13/config.log
