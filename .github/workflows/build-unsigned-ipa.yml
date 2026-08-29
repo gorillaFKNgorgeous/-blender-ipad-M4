@@ -60,6 +60,18 @@ jobs:
           sysctl -n hw.ncpu
           df -h
 
+      - name: Install iOS build dependencies
+        shell: bash
+        run: |
+          brew install libffi
+          LIBFFI_PREFIX="$(brew --prefix libffi)"
+          echo "LDFLAGS=-L${LIBFFI_PREFIX}/lib" >> "$GITHUB_ENV"
+          echo "CPPFLAGS=-I${LIBFFI_PREFIX}/include" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=${LIBFFI_PREFIX}/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "libffi prefix: ${LIBFFI_PREFIX}"
+          ls -la "${LIBFFI_PREFIX}/include"
+          ls -la "${LIBFFI_PREFIX}/lib"
+
       - name: Prepare pinned Blender 5.2 iOS source and libraries
         run: bash ./scripts/prepare-source.sh "$SOURCE_DIR"
 
