@@ -47,21 +47,16 @@ echo "Host-only libffi headers prepared at $host_libffi_prefix"
 # cannot leak into target wheels. zstandard's isolated build installs CFFI, whose setup.py
 # needs ffi.h and resolves -lffi itself. Give every iOS wheel sandbox the already-planned
 # target libffi location. These paths do not need to exist yet; external_ffi is built before
-# NumPy/zstandard are invoked. The platform-specific setting takes precedence over each
-# generic CIBW_ENVIRONMENT value while remaining invisible to native macOS builds.
-#
-# IPHONEOS_DEPLOYMENT_TARGET must also exist in the outer GitHub Actions environment.
-# cibuildwheel selects the iOS wheel platform tag before it enters the sanitized target
-# environment, so keeping the value only inside CIBW_ENVIRONMENT_IOS can produce an ios_13_0
-# filename even when the extension itself is compiled with -target arm64-apple-ios26.0.
+# NumPy/zstandard are invoked. Keep all iOS deployment-target state inside the iOS wheel
+# sandbox: exporting IPHONEOS_DEPLOYMENT_TARGET through GITHUB_ENV contaminates native host
+# CPython, while cibuildwheel 4.2 still derives zstandard's filename from its iOS baseline.
+# We therefore verify the built Mach-O deployment target directly before bundling it.
 if [[ -n "${GITHUB_ENV:-}" && -n "${GITHUB_WORKSPACE:-}" ]]; then
   ios_libffi_root="$GITHUB_WORKSPACE/work/deps-ios-bootstrap/Release/ffi"
   printf '%s\n' \
-    "IPHONEOS_DEPLOYMENT_TARGET=26.0" \
     "CIBW_ENVIRONMENT_IOS=RUNNER_OS=macOS RUNNER_ARCH=ARM64 INSTALL_OPENBLAS=false IPHONEOS_DEPLOYMENT_TARGET=26.0 CFLAGS='-I${ios_libffi_root}/include' LDFLAGS='-L${ios_libffi_root}/lib'" \
     "CIBW_CONFIG_SETTINGS=--global-option=--no-cffi-backend" \
     >> "$GITHUB_ENV"
-  echo "Configured outer iOS deployment target for cibuildwheel tag selection: 26.0"
   echo "Configured iOS-only cibuildwheel libffi search paths: $ios_libffi_root"
   echo "Configured zstandard cibuildwheel to use its native CPython C backend only"
 fi
