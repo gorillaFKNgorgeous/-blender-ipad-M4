@@ -50,15 +50,18 @@ echo "Host-only libffi headers prepared at $host_libffi_prefix"
 # NumPy/zstandard are invoked. Keep all iOS deployment-target state inside the iOS wheel
 # sandbox: exporting IPHONEOS_DEPLOYMENT_TARGET through GITHUB_ENV contaminates native host
 # CPython, while cibuildwheel 4.2 still derives zstandard's filename from its iOS baseline.
-# We therefore verify the built Mach-O deployment target directly before bundling it.
+# A repair hook makes the wheel tag truthful; the workflow then verifies the extracted
+# Mach-O directly before it can enter the Blender app bundle.
 if [[ -n "${GITHUB_ENV:-}" && -n "${GITHUB_WORKSPACE:-}" ]]; then
   ios_libffi_root="$GITHUB_WORKSPACE/work/deps-ios-bootstrap/Release/ffi"
   printf '%s\n' \
     "CIBW_ENVIRONMENT_IOS=RUNNER_OS=macOS RUNNER_ARCH=ARM64 INSTALL_OPENBLAS=false IPHONEOS_DEPLOYMENT_TARGET=26.0 CFLAGS='-I${ios_libffi_root}/include' LDFLAGS='-L${ios_libffi_root}/lib'" \
     "CIBW_CONFIG_SETTINGS=--global-option=--no-cffi-backend" \
+    "CIBW_REPAIR_WHEEL_COMMAND_IOS=python ${GITHUB_WORKSPACE}/scripts/retag-ios-wheel.py {wheel} {dest_dir}" \
     >> "$GITHUB_ENV"
   echo "Configured iOS-only cibuildwheel libffi search paths: $ios_libffi_root"
   echo "Configured zstandard cibuildwheel to use its native CPython C backend only"
+  echo "Configured deterministic iOS 26 wheel retag repair"
 fi
 
 if [[ ! -f "$IOS_PATCH" ]]; then
