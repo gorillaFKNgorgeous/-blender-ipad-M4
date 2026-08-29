@@ -617,12 +617,34 @@ jobs:
             "$SOURCE_DIR/lib/ios_arm64/zlib/lib/libz.a" \
             "$SOURCE_DIR/lib/ios_arm64/bzip2/lib/libbz2.a" \
             "$SOURCE_DIR/lib/ios_arm64/lzma/lib/liblzma.a" \
-            "$SOURCE_DIR/lib/ios_arm64/libb2/lib/libb2.a"
+            "$SOURCE_DIR/lib/ios_arm64/libb2/lib/libb2.a" \
+            "$SOURCE_DIR/lib/ios_arm64/usd/include/pxr/pxr.h" \
+            "$SOURCE_DIR/lib/ios_arm64/usd/lib/libusd_ms.dylib"
           do
             require_file "$required_file"
           done
           require_dir "$python_root/lib/python3.13"
           require_absent_file "$python_root/lib/libpython3.11.a"
+
+          usd_version_header="$SOURCE_DIR/lib/ios_arm64/usd/include/pxr/pxr.h"
+          usd_version_log="$GITHUB_WORKSPACE/usd-ios-version.txt"
+          usd_version="$(awk '/^#define PXR_VERSION / {print $3; exit}' "$usd_version_header")"
+          require_nonempty "OpenUSD PXR_VERSION" "$usd_version"
+          if [[ ! "$usd_version" =~ ^[0-9]+$ ]]; then
+            echo "::error::Invalid PXR_VERSION in $usd_version_header: $usd_version"
+            exit 1
+          fi
+          {
+            printf 'PXR_VERSION=%s\n' "$usd_version"
+            if (( usd_version < 2505 )); then
+              echo "UsdUIAccessibilityAPI unavailable; Blender compatibility guards are active."
+            else
+              echo "UsdUIAccessibilityAPI expected from this OpenUSD version."
+            fi
+          } | tee "$usd_version_log"
+          if (( usd_version >= 2505 )); then
+            require_file "$SOURCE_DIR/lib/ios_arm64/usd/include/pxr/usd/usdUI/accessibilityAPI.h"
+          fi
 
           python_linkage_audit="$GITHUB_WORKSPACE/ios-python-linkage-audit.txt"
           : > "$python_linkage_audit"
@@ -733,12 +755,14 @@ jobs:
           done < <(find \
             "$SOURCE_DIR/lib/ios_arm64/draco/lib" \
             "$SOURCE_DIR/lib/ios_arm64/meshoptimizer/lib" \
+            "$SOURCE_DIR/lib/ios_arm64/usd/lib" \
             -type f \( -name '*.dylib' -o -name '*.dylib.*' \) -print)
 
-          echo "Discovered Draco and meshoptimizer libraries:"
+          echo "Discovered Draco, meshoptimizer, and USD libraries:"
           find \
             "$SOURCE_DIR/lib/ios_arm64/draco/lib" \
             "$SOURCE_DIR/lib/ios_arm64/meshoptimizer/lib" \
+            "$SOURCE_DIR/lib/ios_arm64/usd/lib" \
             -type f \( -name '*.a' -o -name '*.dylib' -o -name '*.dylib.*' \) -print | sort
 
           nm -gU "$SOURCE_DIR/lib/ios_arm64/ssl/lib/libcrypto.a" | \
@@ -806,6 +830,8 @@ jobs:
             -DWITH_XR_OPENXR=OFF \
             2>&1 | tee "$GITHUB_WORKSPACE/cmake-configure.log"
 
+          grep -Fx 'WITH_USD:BOOL=ON' "$BUILD_DIR/CMakeCache.txt" >/dev/null
+          grep -Fx 'WITH_HYDRA:BOOL=OFF' "$BUILD_DIR/CMakeCache.txt" >/dev/null
           grep -Fx 'WITH_OPENAL:BOOL=ON' "$BUILD_DIR/CMakeCache.txt" >/dev/null
           grep -F -- '-DWITH_OPENAL=OFF' "$GITHUB_WORKSPACE/cmake-configure.log" >/dev/null
           echo "Verified OpenAL is enabled for the iOS app and disabled only for host tools"
@@ -880,6 +906,7 @@ jobs:
             zstandard-ios-build.log
             ios-dependency-verification.log
             ios-python-linkage-audit.txt
+            usd-ios-version.txt
             work/python-host-3.13.13/config.log
             work/python-ios-3.13.13/config.log
             work/deps-ios-bootstrap/build/*/src/*/config.log

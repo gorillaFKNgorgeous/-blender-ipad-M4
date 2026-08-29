@@ -583,3 +583,142 @@ diff --git a/source/blender/python/generic/python_compat.hh b/source/blender/pyt
 +#if PY_VERSION_HEX >= 0x030d0000
  int _PyArg_CheckPositional(const char *name, Py_ssize_t nargs, Py_ssize_t min, Py_ssize_t max);
  #endif
+diff --git a/source/blender/io/usd/intern/usd_capi_export.cc b/source/blender/io/usd/intern/usd_capi_export.cc
+index 7726a44..3a72bac 100644
+--- a/source/blender/io/usd/intern/usd_capi_export.cc
++++ b/source/blender/io/usd/intern/usd_capi_export.cc
+@@ -24,7 +24,9 @@
+ #include <pxr/usd/usdGeom/tokens.h>
+ #include <pxr/usd/usdGeom/xform.h>
+ #include <pxr/usd/usdGeom/xformCommonAPI.h>
+-#include <pxr/usd/usdUI/accessibilityAPI.h>
++#if PXR_VERSION >= 2505
++#  include <pxr/usd/usdUI/accessibilityAPI.h>
++#endif
+ #include <pxr/usd/usdUtils/usdzPackage.h>
+ 
+ #include "MEM_guardedalloc.h"
+@@ -202,6 +204,7 @@ static void ensure_root_prim(pxr::UsdStageRefPtr stage, const USDExportParams &p
+   }
+ }
+ 
++#if PXR_VERSION >= 2505
+ /**
+  * If the user has provided an accessibility label and description for the export,
+  * write that information to the exported stage's default prim. This information
+@@ -230,6 +233,7 @@ static void write_root_accessibility_information(pxr::UsdStageRefPtr stage,
+     accessibility_api.CreateDescriptionAttr().Set(params.accessibility_description);
+   }
+ }
++#endif
+ 
+ static void report_job_duration(const ExportJobData *data)
+ {
+@@ -631,8 +635,10 @@ pxr::UsdStageRefPtr export_to_stage(const USDExportParams &params,
+     }
+   }
+ 
++#if PXR_VERSION >= 2505
+   /* Write accessibility information to the default prim. */
+   write_root_accessibility_information(usd_stage, params);
++#endif
+ 
+   if (params.use_instancing) {
+     process_scene_graph_instances(params, usd_stage);
+diff --git a/source/blender/io/usd/intern/usd_reader_utils.cc b/source/blender/io/usd/intern/usd_reader_utils.cc
+index 3ae1e01..b7207f7 100644
+--- a/source/blender/io/usd/intern/usd_reader_utils.cc
++++ b/source/blender/io/usd/intern/usd_reader_utils.cc
+@@ -8,8 +8,11 @@
+ 
+ #include "BKE_idprop.hh"
+ 
++#include <pxr/pxr.h>
+ #include <pxr/usd/usd/attribute.h>
+-#include <pxr/usd/usdUI/accessibilityAPI.h>
++#if PXR_VERSION >= 2505
++#  include <pxr/usd/usdUI/accessibilityAPI.h>
++#endif
+ 
+ #include "CLG_log.h"
+ 
+@@ -159,6 +162,7 @@ static void set_double_prop(IDProperty *idgroup, const StringRefNull prop_name,
+   IDP_AddToGroup(idgroup, prop);
+ }
+ 
++#if PXR_VERSION >= 2505
+ static void set_accessibility_property(const pxr::UsdAttribute &attr,
+                                        IDProperty *idgroup,
+                                        const pxr::UsdTimeCode time_code)
+@@ -189,18 +193,21 @@ static void set_accessibility_property(const pxr::UsdAttribute &attr,
+     }
+   }
+ }
++#endif
+ 
+ void set_id_props_from_prim(ID *id,
+                             const pxr::UsdPrim &prim,
+                             const PropertyImportMode property_import_mode,
+                             const pxr::UsdTimeCode time_code)
+ {
++#if PXR_VERSION >= 2505
+   for (const auto &api : pxr::UsdUIAccessibilityAPI::GetAll(prim)) {
+     IDProperty *idgroup = IDP_EnsureProperties(id);
+     set_accessibility_property(api.GetLabelAttr(), idgroup, time_code);
+     set_accessibility_property(api.GetDescriptionAttr(), idgroup, time_code);
+     set_accessibility_property(api.GetPriorityAttr(), idgroup, time_code);
+   }
++#endif
+ 
+   pxr::UsdAttributeVector attribs = prim.GetAuthoredAttributes();
+   if (attribs.empty()) {
+diff --git a/source/blender/io/usd/intern/usd_writer_abstract.cc b/source/blender/io/usd/intern/usd_writer_abstract.cc
+index e0f8c65..b0ac479 100644
+--- a/source/blender/io/usd/intern/usd_writer_abstract.cc
++++ b/source/blender/io/usd/intern/usd_writer_abstract.cc
+@@ -9,9 +9,12 @@
+ #include "usd_writer_material.hh"
+ 
+ #include <pxr/base/tf/stringUtils.h>
++#include <pxr/pxr.h>
+ #include <pxr/usd/usdGeom/bboxCache.h>
+ #include <pxr/usd/usdGeom/scope.h>
+-#include <pxr/usd/usdUI/accessibilityAPI.h>
++#if PXR_VERSION >= 2505
++#  include <pxr/usd/usdUI/accessibilityAPI.h>
++#endif
+ 
+ #include "BLI_assert.h"
+ #include "BLI_bounds_types.hh"
+@@ -32,6 +35,7 @@ namespace usdtokens {
+ static const pxr::TfToken blender_ns("userProperties:blender", pxr::TfToken::Immortal);
+ }  // namespace usdtokens
+ 
++#if PXR_VERSION >= 2505
+ namespace {
+ struct AccessibilityPropertyName {
+   pxr::TfToken property_namespace;
+@@ -101,6 +105,7 @@ static void write_accessibility_property(const pxr::UsdPrim &prim,
+     }
+   }
+ }
++#endif
+ 
+ static std::string get_mesh_active_uvlayer_name(const Object *ob)
+ {
+@@ -465,6 +470,7 @@ void USDAbstractWriter::write_user_properties(const pxr::UsdPrim &prim,
+       continue;
+     }
+ 
++#if PXR_VERSION >= 2505
+     if (auto accessibility_property_name = parse_accessibility_property_name(
+             prop, usd_export_context_.export_params.allow_unicode))
+     {
+@@ -474,6 +480,7 @@ void USDAbstractWriter::write_user_properties(const pxr::UsdPrim &prim,
+       }
+       continue;
+     }
++#endif
+ 
+     std::vector<std::string> path_names = pxr::TfStringTokenize(prop->name, ":");
+ 
