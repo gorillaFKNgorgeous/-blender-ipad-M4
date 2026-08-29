@@ -53,8 +53,10 @@ if [[ -n "${GITHUB_ENV:-}" && -n "${GITHUB_WORKSPACE:-}" ]]; then
   ios_libffi_root="$GITHUB_WORKSPACE/work/deps-ios-bootstrap/Release/ffi"
   printf '%s\n' \
     "CIBW_ENVIRONMENT_IOS=RUNNER_OS=macOS RUNNER_ARCH=ARM64 INSTALL_OPENBLAS=false IPHONEOS_DEPLOYMENT_TARGET=26.0 CFLAGS='-I${ios_libffi_root}/include' LDFLAGS='-L${ios_libffi_root}/lib'" \
+    "CIBW_CONFIG_SETTINGS=--global-option=--no-cffi-backend" \
     >> "$GITHUB_ENV"
   echo "Configured iOS-only cibuildwheel libffi search paths: $ios_libffi_root"
+  echo "Configured zstandard cibuildwheel to use its native CPython C backend only"
 fi
 
 if [[ ! -f "$IOS_PATCH" ]]; then
