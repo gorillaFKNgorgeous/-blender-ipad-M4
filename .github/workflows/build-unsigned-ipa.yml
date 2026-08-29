@@ -364,8 +364,14 @@ jobs:
           while IFS= read -r numpy_extension; do
             xcrun vtool -show-build "$numpy_extension" | grep -F 'platform IOS' >/dev/null
             otool -L "$numpy_extension" | grep -F '@rpath/Python.framework/Python' >/dev/null
-            if otool -L "$numpy_extension" | grep -E '/opt/homebrew|/Users/runner|MacOSX\.sdk' >/dev/null; then
+            # `otool -L` prints the inspected file path as its first line. Exclude that
+            # header so the checkout's /Users/runner path is not mistaken for a linked
+            # host dependency; every actual dependency line remains under inspection.
+            if otool -L "$numpy_extension" | sed -n '2,$p' | \
+              grep -E '/opt/homebrew|/Users/runner|MacOSX\.sdk' >/dev/null
+            then
               echo "NumPy extension contains a host-only dependency: $numpy_extension" >&2
+              otool -L "$numpy_extension" >&2
               exit 1
             fi
           done < <(find "$numpy_site_packages/numpy" -type f -name '*.so' -print)
