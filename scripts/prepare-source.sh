@@ -19,12 +19,29 @@ if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
   exit 1
 fi
 
-for command in git git-lfs cmake xcodebuild plutil; do
+for command in git git-lfs cmake xcodebuild plutil brew; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "Missing required command: $command" >&2
     exit 1
   fi
 done
+
+# The build-machine CPython 3.13.13 needs macOS libffi headers for its native _ctypes
+# module. Keep this strictly a host-tool dependency: do not export CPPFLAGS, LDFLAGS,
+# PKG_CONFIG_PATH, or any other Homebrew path into the workflow environment. Homebrew's
+# libffi is keg-only, so force-link its headers and pkg-config metadata into the ordinary
+# Homebrew prefix where the later host configure can discover it. The iOS CPython build
+# disables pkg-config and supplies its own iOS LIBFFI_CFLAGS/LIBFFI_LIBS explicitly.
+if ! brew list --versions libffi >/dev/null 2>&1; then
+  brew install libffi
+fi
+host_libffi_prefix="$(brew --prefix libffi)"
+brew link --overwrite --force libffi >/dev/null
+brew_prefix="$(brew --prefix)"
+test -f "$host_libffi_prefix/include/ffi.h"
+test -e "$brew_prefix/include/ffi.h"
+test -e "$brew_prefix/lib/pkgconfig/libffi.pc"
+echo "Host-only libffi headers prepared at $host_libffi_prefix"
 
 if [[ ! -f "$IOS_PATCH" ]]; then
   echo "Missing Blender 5.2 iPad compatibility patch: $IOS_PATCH" >&2
