@@ -82,7 +82,7 @@ jobs:
           # Bump this explicit revision only when dependency-bootstrap inputs change.
           # Keeping it independent of unrelated workflow/app edits lets later Blender
           # compile fixes reuse the verified native dependency bundle.
-          key: ios-5.2-bootstrap-${{ runner.os }}-xcode-26.3-${{ env.BLENDER_REF }}-python-3.13.13-numpy-2.3.4-draco-meshopt-v4
+          key: ios-5.2-bootstrap-${{ runner.os }}-xcode-26.3-${{ env.BLENDER_REF }}-python-3.13.13-numpy-2.3.4-draco-meshopt-v5
 
       - name: Install dependency build tools
         if: steps.ios-bootstrap-cache.outputs.cache-hit != 'true'
@@ -264,6 +264,19 @@ jobs:
           test -f "$numpy_package"
           mkdir -p "$numpy_src" "$numpy_wheelhouse"
           tar -xf "$numpy_package" -C "$numpy_src" --strip-components=1
+
+          # NumPy 2.3.4 predates upstream's official iOS wheel support
+          # (numpy/numpy#28759, commit ec6b2b2626d0fc2b1505f3ffd7905862ebe605f4).
+          # Backport the iOS platform fixes, including correct Accelerate symbol
+          # mangling, arm64 long-double detection, .fwork loading, and test guards.
+          (
+            cd "$numpy_src"
+            git apply --check "$GITHUB_WORKSPACE/patches/numpy-2.3.4-ios-support.diff"
+            git apply "$GITHUB_WORKSPACE/patches/numpy-2.3.4-ios-support.diff"
+          )
+          grep -F '#include "TargetConditionals.h"' \
+            "$numpy_src/numpy/_core/src/common/npy_cblas.h" >/dev/null
+
           "$host_python_prefix/bin/python3.13" -m pip install \
             --disable-pip-version-check \
             "cibuildwheel==4.2.0"
@@ -277,7 +290,9 @@ jobs:
             export CIBW_XBUILD_TOOLS=ninja
             export CIBW_BUILD_FRONTEND=build
             export CIBW_ENVIRONMENT="RUNNER_OS=macOS RUNNER_ARCH=ARM64 INSTALL_OPENBLAS=false IPHONEOS_DEPLOYMENT_TARGET=26.0"
-            export CIBW_CONFIG_SETTINGS="setup-args=-Duse-ilp64=false setup-args=-Dblas=accelerate setup-args=-Dlapack=accelerate setup-args=-Dallow-noblas=false build-dir=build-ios"
+            # Upstream's iOS wheel profile uses Accelerate ILP64 on iOS 16.4+.
+            # iPadOS 27 therefore gets the complete 64-bit BLAS/LAPACK interface.
+            export CIBW_CONFIG_SETTINGS="setup-args=-Duse-ilp64=true setup-args=-Dblas=accelerate setup-args=-Dlapack=accelerate setup-args=-Dallow-noblas=false build-dir=build-ios"
             "$host_python_prefix/bin/python3.13" -m cibuildwheel \
               --platform ios \
               --config-file /dev/null \
@@ -293,6 +308,16 @@ jobs:
           ditto -x -k "$numpy_wheel" "$numpy_site_packages"
           test -f "$numpy_site_packages/numpy/_core/include/numpy/arrayobject.h"
           test -n "$(find "$numpy_site_packages/numpy" -type f -name '*.so' -print -quit)"
+          numpy_linalg_extension="$(find "$numpy_site_packages/numpy/linalg" -type f \
+            -name '_umath_linalg*.so' -print -quit)"
+          test -n "$numpy_linalg_extension"
+          nm -u "$numpy_linalg_extension" | grep -F '$NEWLAPACK$ILP64' >/dev/null
+          if nm -u "$numpy_linalg_extension" | grep -F '$NEWLAPACK_' >/dev/null; then
+            echo "NumPy retained the invalid iOS Fortran underscore after the Accelerate suffix" >&2
+            exit 1
+          fi
+          otool -L "$numpy_linalg_extension" | \
+            grep -F 'Accelerate.framework/Accelerate' >/dev/null
           while IFS= read -r numpy_extension; do
             xcrun vtool -show-build "$numpy_extension" | grep -F 'platform IOS' >/dev/null
             otool -L "$numpy_extension" | grep -F '@rpath/Python.framework/Python' >/dev/null
@@ -442,7 +467,7 @@ jobs:
             work/blender/lib/ios_arm64/libb2
             work/blender/lib/ios_arm64/draco
             work/blender/lib/ios_arm64/meshoptimizer
-          key: ios-5.2-bootstrap-${{ runner.os }}-xcode-26.3-${{ env.BLENDER_REF }}-python-3.13.13-numpy-2.3.4-draco-meshopt-v4
+          key: ios-5.2-bootstrap-${{ runner.os }}-xcode-26.3-${{ env.BLENDER_REF }}-python-3.13.13-numpy-2.3.4-draco-meshopt-v5
 
       - name: Configure full Blender 5.2 iPad profile
         run: |
