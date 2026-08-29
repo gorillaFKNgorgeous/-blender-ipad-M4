@@ -391,8 +391,14 @@ jobs:
             export CIBW_TEST_COMMAND=""
             export CIBW_XBUILD_TOOLS=""
             export CIBW_ENVIRONMENT="IPHONEOS_DEPLOYMENT_TARGET=26.0"
+            # zstandard 0.25.0's release config enables cibuildwheel's former
+            # `cpython-freethreading` group. cibuildwheel 4 removed that group, and it
+            # is unrelated to this pinned, GIL-enabled CPython 3.13 iOS wheel. Isolate
+            # the build from release-matrix settings while retaining our explicit iOS
+            # architecture, environment, and no-test policy above.
             "$host_python_prefix/bin/python3.13" -m cibuildwheel \
               --platform ios \
+              --config-file /dev/null \
               --output-dir "$zstandard_wheelhouse" \
               . 2>&1 | tee "$GITHUB_WORKSPACE/zstandard-ios-build.log"
           )
