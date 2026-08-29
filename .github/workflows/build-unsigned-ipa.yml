@@ -227,18 +227,11 @@ jobs:
               2>&1 | tee "$GITHUB_WORKSPACE/python-ios-configure.log"
 
             # CPython's unversioned Apple framework rule links libpython followed by
-            # $(LIBS), but does not include the per-module *_LIBS configure variables.
-            # Keep the configure-discovered system flags and explicitly supply every
-            # archive needed by the static stdlib modules retained above.
-            python_ios_framework_libs="-ldl -lpthread \
-              $deps_build/Release/ssl/lib/libssl.a \
-              $deps_build/Release/ssl/lib/libcrypto.a \
-              $deps_build/Release/sqlite/lib/libsqlite3.a \
-              $deps_build/Release/zlib/lib/libz.a \
-              $deps_build/Release/bzip2/lib/libbz2.a \
-              $deps_build/Release/lzma/lib/liblzma.a \
-              $deps_build/Release/ffi/lib/libffi.a \
-              $deps_build/Release/libb2/lib/libb2.a"
+            # $(LIBS), but omits its generated $(MODLIBS) set. Inject the complete set
+            # so bundled support archives (Expat, mpdecimal, HACL) and every external
+            # static stdlib dependency are retained in the framework. The single quotes
+            # deliberately leave the make-variable references for make to expand.
+            python_ios_framework_libs='$(MODLIBS) $(SYSLIBS) -ldl -lpthread'
             make -j3 LIBS="$python_ios_framework_libs" \
               2>&1 | tee "$GITHUB_WORKSPACE/python-ios-build.log"
             make LIBS="$python_ios_framework_libs" install \
