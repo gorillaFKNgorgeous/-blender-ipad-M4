@@ -333,7 +333,8 @@ jobs:
             echo "::error::Unable to inspect exported Python framework symbols"
             exit 1
           fi
-          for required_symbol in _PyInit__ctypes _PyInit__ssl _PyInit__sqlite3; do
+          # nm adds a Mach-O prefix to CPython's leading-underscore C symbol.
+          for required_symbol in __PyArg_CheckPositional _PyInit__ctypes _PyInit__ssl _PyInit__sqlite3; do
             if ! grep -E "[[:space:]]${required_symbol}$" \
               "$python_framework_symbols_log" >/dev/null
             then
@@ -701,7 +702,8 @@ jobs:
           xcrun vtool -show-build "$python_framework" > "$python_framework_build_log"
           grep -F 'platform IOS' "$python_framework_build_log" >/dev/null
           nm -gU "$python_framework" > "$python_framework_symbols_log"
-          for required_symbol in _PyInit__ctypes _PyInit__ssl _PyInit__sqlite3; do
+          # nm adds a Mach-O prefix to CPython's leading-underscore C symbol.
+          for required_symbol in __PyArg_CheckPositional _PyInit__ctypes _PyInit__ssl _PyInit__sqlite3; do
             if ! grep -E "[[:space:]]${required_symbol}$" \
               "$python_framework_symbols_log" >/dev/null
             then

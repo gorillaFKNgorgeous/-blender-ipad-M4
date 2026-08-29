@@ -133,10 +133,15 @@ input_system="$SOURCE_DIR/intern/ghost/intern/GHOST_SystemIOS.mm"
 input_window="$SOURCE_DIR/intern/ghost/intern/GHOST_WindowIOS.mm"
 info_plist="$SOURCE_DIR/release/ios/Blender.app/Info.plist"
 bundle_script="$SOURCE_DIR/release/ios/scripts/copy_bundle_data.sh"
+python_compat_header="$SOURCE_DIR/source/blender/python/generic/python_compat.hh"
+python_compat_source="$SOURCE_DIR/source/blender/python/generic/python_compat.cc"
 
 grep -Eq '^#define BLENDER_VERSION +502$' "$version_header"
 grep -Eq '^#define BLENDER_VERSION_PATCH +0$' "$version_header"
 grep -Eq '^#define BLENDER_VERSION_CYCLE +release$' "$version_header"
+test "$(grep -Fc '#if PY_VERSION_HEX >= 0x030d0000' "$python_compat_header")" -eq 1
+grep -Fq 'while retaining the exported function' "$python_compat_header"
+test "$(grep -Fc '#if PY_VERSION_HEX >= 0x030e0000' "$python_compat_source")" -eq 1
 grep -Fq 'GHOST_SystemIOS::setPointerButtonState' "$input_system"
 test "$(grep -Fc -- '- (void)pushIndirectPointerCursorEvent' "$input_window")" -eq 1
 method_line="$(grep -n -m1 -- '- (void)pushIndirectPointerCursorEvent' "$input_window" | cut -d: -f1)"

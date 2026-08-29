@@ -569,3 +569,17 @@ index 67f848260e7..11111111111 100644
 
    INSTALL_DIR ${LIBDIR}/ffi
  )
+diff --git a/source/blender/python/generic/python_compat.hh b/source/blender/python/generic/python_compat.hh
+--- a/source/blender/python/generic/python_compat.hh
++++ b/source/blender/python/generic/python_compat.hh
+@@ -101,7 +101,8 @@
+ /* TODO: Support: `PyDict_Pop`, it has different arguments. */
+ #endif
+ 
+-/* _PyArg_CheckPositional is a macro in Python < 3.14, only declare as function for 3.14+. */
+-#if PY_VERSION_HEX >= 0x030e0000
++/* _PyArg_CheckPositional is public through Python 3.12. Python 3.13 moves the declaration
++ * to internal headers while retaining the exported function. */
++#if PY_VERSION_HEX >= 0x030d0000
+ int _PyArg_CheckPositional(const char *name, Py_ssize_t nargs, Py_ssize_t min, Py_ssize_t max);
+ #endif
