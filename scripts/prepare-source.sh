@@ -43,6 +43,20 @@ test -e "$brew_prefix/include/ffi.h"
 test -e "$brew_prefix/lib/pkgconfig/libffi.pc"
 echo "Host-only libffi headers prepared at $host_libffi_prefix"
 
+# cibuildwheel deliberately sanitizes iOS build environments so macOS/Homebrew libraries
+# cannot leak into target wheels. zstandard's isolated build installs CFFI, whose setup.py
+# needs ffi.h and resolves -lffi itself. Give every iOS wheel sandbox the already-planned
+# target libffi location. These paths do not need to exist yet; external_ffi is built before
+# NumPy/zstandard are invoked. The platform-specific setting takes precedence over each
+# generic CIBW_ENVIRONMENT value while remaining invisible to native macOS builds.
+if [[ -n "${GITHUB_ENV:-}" && -n "${GITHUB_WORKSPACE:-}" ]]; then
+  ios_libffi_root="$GITHUB_WORKSPACE/work/deps-ios-bootstrap/Release/ffi"
+  printf '%s\n' \
+    "CIBW_ENVIRONMENT_IOS=RUNNER_OS=macOS RUNNER_ARCH=ARM64 INSTALL_OPENBLAS=false IPHONEOS_DEPLOYMENT_TARGET=26.0 CFLAGS='-I${ios_libffi_root}/include' LDFLAGS='-L${ios_libffi_root}/lib'" \
+    >> "$GITHUB_ENV"
+  echo "Configured iOS-only cibuildwheel libffi search paths: $ios_libffi_root"
+fi
+
 if [[ ! -f "$IOS_PATCH" ]]; then
   echo "Missing Blender 5.2 iPad compatibility patch: $IOS_PATCH" >&2
   exit 1
