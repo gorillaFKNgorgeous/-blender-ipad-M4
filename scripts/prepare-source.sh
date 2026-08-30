@@ -145,7 +145,8 @@ grep -Eq '^#define BLENDER_VERSION +502$' "$version_header"
 grep -Eq '^#define BLENDER_VERSION_PATCH +0$' "$version_header"
 grep -Eq '^#define BLENDER_VERSION_CYCLE +release$' "$version_header"
 test "$(grep -Fc '#if PY_VERSION_HEX >= 0x030d0000' "$python_compat_header")" -eq 1
-grep -Fq 'while retaining the exported function' "$python_compat_header"
+grep -Fq 'The declaration must have C linkage' "$python_compat_header"
+grep -Fq 'extern "C"' "$python_compat_header"
 test "$(grep -Fc '#if PY_VERSION_HEX >= 0x030e0000' "$python_compat_source")" -eq 1
 for usd_compat_source in "${usd_compat_sources[@]}"; do
   test "$(grep -Fc '#if PXR_VERSION >= 2505' "$usd_compat_source")" -eq 3
