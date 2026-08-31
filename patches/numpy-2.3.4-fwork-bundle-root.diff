@@ -1,6 +1,6 @@
 --- a/numpy/ctypeslib/_ctypeslib.py
 +++ b/numpy/ctypeslib/_ctypeslib.py
-@@ -1,11 +1,26 @@
+@@ -130,11 +130,26 @@
          if sys.platform == "ios" and loader_path.endswith(".fwork"):
 -            # iOS requires dynamic libraries to be delivered as frameworks;
 -            # CPython uses .fwork files to point to their bundled location.
