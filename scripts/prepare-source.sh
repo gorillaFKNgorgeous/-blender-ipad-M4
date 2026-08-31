@@ -5,6 +5,7 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HARNESS_DIR="$(dirname "$SCRIPT_DIR")"
 IOS_PATCH="$HARNESS_DIR/patches/ios-5.2-m4-full.patch"
+CODEC_TRANSFORM="$HARNESS_DIR/scripts/apply-ios-codec-frameworks.py"
 
 SOURCE_DIR="${1:-$PWD/work/blender}"
 UPSTREAM_URL="${BLENDER_UPSTREAM_URL:-https://github.com/salmazov/blender-ios.git}"
@@ -68,6 +69,10 @@ if [[ ! -f "$IOS_PATCH" ]]; then
   echo "Missing Blender 5.2 iPad compatibility patch: $IOS_PATCH" >&2
   exit 1
 fi
+if [[ ! -f "$CODEC_TRANSFORM" ]]; then
+  echo "Missing iOS codec framework transform: $CODEC_TRANSFORM" >&2
+  exit 1
+fi
 if [[ -e "$SOURCE_DIR" ]]; then
   echo "Source destination already exists: $SOURCE_DIR" >&2
   exit 1
@@ -126,6 +131,7 @@ git -C "$SOURCE_DIR/lib/macos_arm64" lfs pull
 # applied wholesale because 5.2 has newer keyboard, Pencil, pointer, and GCMouse code.
 git -C "$SOURCE_DIR" apply --check "$IOS_PATCH"
 git -C "$SOURCE_DIR" apply "$IOS_PATCH"
+python3 "$CODEC_TRANSFORM" "$SOURCE_DIR"
 git -C "$SOURCE_DIR" diff --check
 
 version_header="$SOURCE_DIR/source/blender/blenkernel/BKE_blender_version.h"
@@ -135,6 +141,11 @@ info_plist="$SOURCE_DIR/release/ios/Blender.app/Info.plist"
 bundle_script="$SOURCE_DIR/release/ios/scripts/copy_bundle_data.sh"
 python_compat_header="$SOURCE_DIR/source/blender/python/generic/python_compat.hh"
 python_compat_source="$SOURCE_DIR/source/blender/python/generic/python_compat.cc"
+draco_dependency_cmake="$SOURCE_DIR/build_files/build_environment/cmake/draco.cmake"
+meshopt_dependency_cmake="$SOURCE_DIR/build_files/build_environment/cmake/meshoptimizer.cmake"
+draco_bridge_cmake="$SOURCE_DIR/intern/draco_bridge/CMakeLists.txt"
+meshopt_bridge_cmake="$SOURCE_DIR/intern/meshoptimizer_bridge/CMakeLists.txt"
+gltf_library="$SOURCE_DIR/scripts/addons_core/io_scene_gltf2/io/com/library.py"
 usd_compat_sources=(
   "$SOURCE_DIR/source/blender/io/usd/intern/usd_capi_export.cc"
   "$SOURCE_DIR/source/blender/io/usd/intern/usd_reader_utils.cc"
@@ -163,6 +174,14 @@ if grep -Fq 'Removing bl_pkg addon' "$bundle_script"; then
   echo "The extension manager would be removed from the app bundle." >&2
   exit 1
 fi
+grep -Fq 'CFBundlePackageType -string FMWK' "$bundle_script"
+grep -Fq 'lib${bridge_name}.fwork' "$bundle_script"
+grep -Fq -- '-DBUILD_SHARED_LIBS=OFF' "$draco_dependency_cmake"
+grep -Fq -- '-DMESHOPT_BUILD_SHARED_LIBS=OFF' "$meshopt_dependency_cmake"
+grep -Fq 'add_library(bf_intern_draco_bridge SHARED' "$draco_bridge_cmake"
+grep -Fq 'add_library(bf_intern_meshopt_bridge SHARED' "$meshopt_bridge_cmake"
+grep -Fq "'ios': 'lib{}.fwork'.format(lib_name)" "$gltf_library"
+grep -Fq 'framework marker is not inside an app bundle' "$gltf_library"
 /usr/libexec/PlistBuddy -c 'Print :UIApplicationSupportsIndirectInputEvents' "$info_plist" | \
   grep -Fxq true
 
@@ -185,4 +204,5 @@ iOS libraries: $actual_ios_lib_ref
 macOS host libraries: $actual_macos_lib_ref
 Bundle identifier: $BUNDLE_ID
 Compatibility patch SHA-256: $(shasum -a 256 "$IOS_PATCH" | awk '{print $1}')
+Codec framework transform SHA-256: $(shasum -a 256 "$CODEC_TRANSFORM" | awk '{print $1}')
 EOF

@@ -65,6 +65,20 @@ jobs:
       - name: Prepare pinned Blender 5.2 iOS source and libraries
         run: bash ./scripts/prepare-source.sh "$SOURCE_DIR"
 
+      - name: Apply iOS codec framework integration
+        run: |
+          set -euo pipefail
+          codec_patch="$GITHUB_WORKSPACE/patches/ios-codec-frameworks.patch"
+          git -C "$SOURCE_DIR" apply --check "$codec_patch"
+          git -C "$SOURCE_DIR" apply "$codec_patch"
+          grep -F 'add_library(bf_intern_draco_bridge SHARED' \
+            "$SOURCE_DIR/intern/draco_bridge/CMakeLists.txt" >/dev/null
+          grep -F 'add_library(bf_intern_meshopt_bridge SHARED' \
+            "$SOURCE_DIR/intern/meshoptimizer_bridge/CMakeLists.txt" >/dev/null
+          grep -F "'ios': 'lib{}.fwork'.format(lib_name)" \
+            "$SOURCE_DIR/scripts/addons_core/io_scene_gltf2/io/com/library.py" >/dev/null
+          echo "Applied self-contained iOS glTF codec bridge integration"
+
       - name: Clear iOS dependency cache overlay targets
         run: |
           set -euo pipefail
@@ -116,10 +130,9 @@ jobs:
             work/blender/lib/ios_arm64/libb2
             work/blender/lib/ios_arm64/draco
             work/blender/lib/ios_arm64/meshoptimizer
-          # Bump this explicit revision only when dependency-bootstrap inputs change.
-          # Keeping it independent of unrelated workflow/app edits lets later Blender
-          # compile fixes reuse the verified native dependency bundle.
-          key: ios-5.2-bootstrap-${{ runner.os }}-xcode-26.3-${{ env.BLENDER_REF }}-python-3.13.13-numpy-2.3.4-draco-meshopt-v5
+          # v6 switches Draco and meshoptimizer from loose shared libraries to static
+          # archives embedded in their loadable glTF bridge frameworks.
+          key: ios-5.2-bootstrap-${{ runner.os }}-xcode-26.3-${{ env.BLENDER_REF }}-python-3.13.13-numpy-2.3.4-draco-meshopt-static-v6
 
       - name: Install dependency build tools
         if: steps.ios-bootstrap-cache.outputs.cache-hit != 'true'
@@ -370,13 +383,25 @@ jobs:
           git -C "$GITHUB_WORKSPACE" apply \
             --directory="$numpy_relative_src" \
             "$GITHUB_WORKSPACE/patches/numpy-2.3.4-ios-support.diff"
+          git -C "$GITHUB_WORKSPACE" apply --check \
+            --directory="$numpy_relative_src" \
+            "$GITHUB_WORKSPACE/patches/numpy-2.3.4-fwork-bundle-root.diff"
+          git -C "$GITHUB_WORKSPACE" apply \
+            --directory="$numpy_relative_src" \
+            "$GITHUB_WORKSPACE/patches/numpy-2.3.4-fwork-bundle-root.diff"
           if ! grep -F '#include "TargetConditionals.h"' \
             "$numpy_src/numpy/_core/src/common/npy_cblas.h" >/dev/null
           then
             echo "::error::NumPy iOS Accelerate backport was not applied to the extracted source"
             exit 1
           fi
-          echo "Applied NumPy 2.3.4 iOS Accelerate and platform support backport"
+          if ! grep -F 'while not app_bundle.endswith(".app")' \
+            "$numpy_src/numpy/ctypeslib/_ctypeslib.py" >/dev/null
+          then
+            echo "::error::NumPy app-bundle .fwork resolver was not applied"
+            exit 1
+          fi
+          echo "Applied NumPy 2.3.4 iOS platform and app-bundle framework backports"
 
           "$host_python_prefix/bin/python3.13" -m pip install \
             --disable-pip-version-check \
@@ -526,8 +551,7 @@ jobs:
             work/blender/lib/ios_arm64/libb2
             work/blender/lib/ios_arm64/draco
             work/blender/lib/ios_arm64/meshoptimizer
-          key: ios-5.2-bootstrap-${{ runner.os }}-xcode-26.3-${{ env.BLENDER_REF }}-python-3.13.13-numpy-2.3.4-draco-meshopt-v5
-
+          key: ios-5.2-bootstrap-${{ runner.os }}-xcode-26.3-${{ env.BLENDER_REF }}-python-3.13.13-numpy-2.3.4-draco-meshopt-static-v6
 
       - name: Verify complete iOS dependency layout
         run: |
@@ -703,19 +727,33 @@ jobs:
           require_nonempty "zstandard iOS extension" "$zstandard_extension"
 
           # Draco installs draco-config.cmake while meshoptimizer installs
-          # meshoptimizerConfig.cmake. BSD find is case-sensitive with -name even on the
-          # default case-insensitive APFS volume, so both package checks use -iname.
+          # meshoptimizerConfig.cmake. Both iOS codec dependencies must now be static;
+          # the loadable runtime boundary is their Blender bridge framework.
           require_find "$SOURCE_DIR/lib/ios_arm64/draco" '*config.cmake' \
             "Draco CMake package config"
           require_find "$SOURCE_DIR/lib/ios_arm64/meshoptimizer" '*config.cmake' \
             "meshoptimizer CMake package config"
 
-          draco_library="$(find "$SOURCE_DIR/lib/ios_arm64/draco/lib" -type f \
-            \( -name '*.a' -o -name '*.dylib' -o -name '*.dylib.*' \) -print -quit)"
-          meshoptimizer_dylib="$(find "$SOURCE_DIR/lib/ios_arm64/meshoptimizer/lib" -type f \
-            -name '*meshoptimizer*.dylib*' -print -quit)"
-          require_nonempty "Draco library" "$draco_library"
-          require_nonempty "meshoptimizer shared library" "$meshoptimizer_dylib"
+          draco_archive="$(find "$SOURCE_DIR/lib/ios_arm64/draco/lib" -type f \
+            -name '*.a' -print -quit)"
+          meshoptimizer_archive="$(find "$SOURCE_DIR/lib/ios_arm64/meshoptimizer/lib" -type f \
+            -name '*meshoptimizer*.a' -print -quit)"
+          require_nonempty "Draco static library" "$draco_archive"
+          require_nonempty "meshoptimizer static library" "$meshoptimizer_archive"
+
+          codec_dylib="$(find \
+            "$SOURCE_DIR/lib/ios_arm64/draco/lib" \
+            "$SOURCE_DIR/lib/ios_arm64/meshoptimizer/lib" \
+            -type f \( -name '*.dylib' -o -name '*.dylib.*' \) -print -quit)"
+          if [[ -n "$codec_dylib" ]]; then
+            echo "::error::Codec bootstrap unexpectedly contains a shared library: $codec_dylib"
+            exit 1
+          fi
+          echo "Verified Draco and meshoptimizer bootstrap outputs are static archives"
+
+          file "$draco_archive" "$meshoptimizer_archive"
+          xcrun lipo -info "$draco_archive" | grep -F arm64 >/dev/null
+          xcrun lipo -info "$meshoptimizer_archive" | grep -F arm64 >/dev/null
 
           file "$python_root/lib/libpython3.13.a"
           python_framework="$python_root/Python.framework/Python"
@@ -743,7 +781,7 @@ jobs:
             -type f -name '*.so' -print)
 
           while IFS= read -r dependency_dylib; do
-            echo "Verifying iOS dependency dylib: $dependency_dylib"
+            echo "Verifying inherited iOS USD dylib: $dependency_dylib"
             xcrun vtool -show-build "$dependency_dylib" | grep -F 'platform IOS' >/dev/null
             if otool -L "$dependency_dylib" | sed -n '2,$p' | \
               grep -E '/opt/homebrew|/Users/runner|MacOSX\.sdk' >/dev/null
@@ -752,13 +790,10 @@ jobs:
               otool -L "$dependency_dylib"
               exit 1
             fi
-          done < <(find \
-            "$SOURCE_DIR/lib/ios_arm64/draco/lib" \
-            "$SOURCE_DIR/lib/ios_arm64/meshoptimizer/lib" \
-            "$SOURCE_DIR/lib/ios_arm64/usd/lib" \
+          done < <(find "$SOURCE_DIR/lib/ios_arm64/usd/lib" \
             -type f \( -name '*.dylib' -o -name '*.dylib.*' \) -print)
 
-          echo "Discovered Draco, meshoptimizer, and USD libraries:"
+          echo "Discovered static codec archives and USD libraries:"
           find \
             "$SOURCE_DIR/lib/ios_arm64/draco/lib" \
             "$SOURCE_DIR/lib/ios_arm64/meshoptimizer/lib" \
@@ -846,6 +881,9 @@ jobs:
             echo "iOS libraries: $(git -C "$SOURCE_DIR/lib/ios_arm64" rev-parse HEAD)"
             echo "macOS libraries: $(git -C "$SOURCE_DIR/lib/macos_arm64" rev-parse HEAD)"
             echo "Compatibility patch: $(shasum -a 256 patches/ios-5.2-m4-full.patch | awk '{print $1}')"
+            echo "Codec framework patch: $(shasum -a 256 patches/ios-codec-frameworks.patch | awk '{print $1}')"
+            echo "NumPy iOS patch: $(shasum -a 256 patches/numpy-2.3.4-ios-support.diff | awk '{print $1}')"
+            echo "NumPy fwork patch: $(shasum -a 256 patches/numpy-2.3.4-fwork-bundle-root.diff | awk '{print $1}')"
             echo "Harness commit: $GITHUB_SHA"
           } > "$ARTIFACT_DIR/Blender-iPad-M4-5.2-source-manifest.txt"
 

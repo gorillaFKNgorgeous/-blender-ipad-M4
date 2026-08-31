@@ -1,0 +1,36 @@
+--- a/numpy/ctypeslib/_ctypeslib.py
++++ b/numpy/ctypeslib/_ctypeslib.py
+@@ -1,11 +1,26 @@
+         if sys.platform == "ios" and loader_path.endswith(".fwork"):
+-            # iOS requires dynamic libraries to be delivered as frameworks;
+-            # CPython uses .fwork files to point to their bundled location.
+-            with open(loader_path) as f:
+-                loader_path = os.path.join(
+-                    os.path.dirname(sys.executable),
+-                    f.read().strip()
+-                )
++            # CPython's stock resolver anchors .fwork paths at sys.executable. Blender
++            # embeds that executable below Assets/<version>/python/bin, so resolve from
++            # the marker itself by walking up to the enclosing .app bundle instead.
++            marker_path = os.path.abspath(loader_path)
++            app_bundle = os.path.dirname(marker_path)
++            while not app_bundle.endswith(".app"):
++                parent = os.path.dirname(app_bundle)
++                if parent == app_bundle:
++                    raise OSError(
++                        "Unable to resolve iOS framework marker outside an app bundle: "
++                        f"{loader_path}"
++                    )
++                app_bundle = parent
++
++            with open(marker_path) as f:
++                framework_relative = f.read().strip()
++            if not framework_relative or os.path.isabs(framework_relative):
++                raise OSError(f"Invalid iOS framework marker: {loader_path}")
++
++            loader_path = os.path.normpath(os.path.join(app_bundle, framework_relative))
++            if os.path.commonpath((app_bundle, loader_path)) != app_bundle:
++                raise OSError(f"iOS framework marker escapes app bundle: {loader_path}")
+             base_ext = ""
+             libname = os.path.basename(loader_path)
+             libname_ext = [libname]

@@ -1,0 +1,38 @@
+diff --git a/intern/draco_bridge/CMakeLists.txt b/intern/draco_bridge/CMakeLists.txt
+index d51ed82..f83fa0d 100644
+--- a/intern/draco_bridge/CMakeLists.txt
++++ b/intern/draco_bridge/CMakeLists.txt
+@@ -22,6 +22,14 @@ add_library(bf_intern_draco_bridge SHARED "${SRC}")
+ blender_link_libraries(bf_intern_draco_bridge "${LIB}")
+ blender_source_group(bf_intern_draco_bridge "${SRC}")
+ 
++if(WITH_APPLE_CROSSPLATFORM)
++  # copy_bundle_data.sh discovers this exact dylib product before wrapping it as a framework.
++  set_target_properties(bf_intern_draco_bridge PROPERTIES
++    PREFIX "lib"
++    SUFFIX ".dylib"
++  )
++endif()
++
+ if(APPLE)
+   # On macOS, prevent the draco library (already present in the application bundle) from being wrongly copied into the
+   # Xcode archive used for application distribution, which pollutes the archive and prevents it from being properly
+diff --git a/intern/meshoptimizer_bridge/CMakeLists.txt b/intern/meshoptimizer_bridge/CMakeLists.txt
+index 133bf89..68719d0 100644
+--- a/intern/meshoptimizer_bridge/CMakeLists.txt
++++ b/intern/meshoptimizer_bridge/CMakeLists.txt
+@@ -23,6 +23,14 @@ add_library(bf_intern_meshopt_bridge SHARED "${SRC}")
+ blender_link_libraries(bf_intern_meshopt_bridge "${LIB}")
+ blender_source_group(bf_intern_meshopt_bridge "${SRC}")
+ 
++if(WITH_APPLE_CROSSPLATFORM)
++  # copy_bundle_data.sh discovers this exact dylib product before wrapping it as a framework.
++  set_target_properties(bf_intern_meshopt_bridge PROPERTIES
++    PREFIX "lib"
++    SUFFIX ".dylib"
++  )
++endif()
++
+ if(APPLE)
+   # On macOS, prevent the `meshopt` library (already present in the application bundle)
+   # from being wrongly copied into the Xcode archive used for application distribution,
