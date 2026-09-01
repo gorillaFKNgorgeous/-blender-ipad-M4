@@ -196,9 +196,13 @@ if grep -Fq '[m_uiview_controller viewDidLoad];' "$input_window"; then
   exit 1
 fi
 grep -Fq '  add_bundled_libraries(osl/lib)' "$platform_apple"
-grep -Fq '  add_bundled_libraries(openjph/lib)' "$platform_apple"
-if grep -Eq '^add_bundled_libraries\((osl|openjph)/lib\)' "$platform_apple"; then
+grep -Fxq 'add_bundled_libraries(openjph/lib)' "$platform_apple"
+if grep -Eq '^add_bundled_libraries\(osl/lib\)' "$platform_apple"; then
   echo "Disabled OSL runtime libraries would still be copied into the iOS bundle." >&2
+  exit 1
+fi
+if grep -Eq '^  add_bundled_libraries\(openjph/lib\)' "$platform_apple"; then
+  echo "OpenJPH would disappear from the native cross-tools runtime when OSL is disabled." >&2
   exit 1
 fi
 test "$(grep -Fc -- '- (void)pushIndirectPointerCursorEvent' "$input_window")" -eq 1
