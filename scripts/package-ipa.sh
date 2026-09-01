@@ -51,6 +51,22 @@ require_match() {
   echo "Verified $label contains: $needle"
 }
 
+require_exact_line() {
+  local haystack="$1"
+  local needle="$2"
+  local label="$3"
+  grep -Fx "$needle" <<< "$haystack" >/dev/null || fail "$label did not contain exact entry: $needle"
+  echo "Verified $label exact entry: $needle"
+}
+
+extract_rpaths() {
+  local binary="$1"
+  otool -l "$binary" | awk '
+    $1 == "cmd" && $2 == "LC_RPATH" { want_path = 1; next }
+    want_path && $1 == "path" { print $2; want_path = 0 }
+  '
+}
+
 if [[ -z "$FULL_MEMORY_ENTITLEMENTS" && -n "${SOURCE_DIR:-}" ]]; then
   FULL_MEMORY_ENTITLEMENTS="$SOURCE_DIR/release/ios/entitlements.plist"
 fi
@@ -250,14 +266,43 @@ if otool -L "$meshopt_bridge" | sed -n '2,$p' | grep -Ei 'libmeshoptimizer[^/]*\
 fi
 echo "Verified glTF bridges contain their codec dependencies without loose dylib linkage"
 
-file "$app_path/$executable"
-main_lipo="$(lipo -info "$app_path/$executable")"
+main_binary="$app_path/$executable"
+file "$main_binary"
+main_lipo="$(lipo -info "$main_binary")"
 require_match "$main_lipo" "arm64" "main executable architecture"
-main_loads="$(otool -L "$app_path/$executable")"
+main_loads="$(otool -L "$main_binary")"
 require_match "$main_loads" "@rpath/Python.framework/Python" "main executable linkage"
-main_commands="$(otool -l "$app_path/$executable")"
-require_match "$main_commands" "@executable_path/Frameworks" "main executable runpath"
-require_match "$main_commands" "@loader_path/Assets/lib" "main executable runpath"
+
+# CMAKE_XCODE_ATTRIBUTE_LD_RUNPATH_SEARCH_PATHS can serialize a semicolon-separated
+# CMake list as one literal LC_RPATH. That produced the launch crash where dyld searched
+# Blender.app/Frameworks;@loader_path/Assets/lib/Python.framework/Python instead of the
+# real Blender.app/Frameworks/Python.framework/Python. Normalize the final Mach-O here,
+# before signing, and then validate the exact LC_RPATH records rather than substrings.
+main_rpaths="$(extract_rpaths "$main_binary")"
+malformed_rpath='@executable_path/Frameworks;@loader_path/Assets/lib'
+if grep -Fx "$malformed_rpath" <<< "$main_rpaths" >/dev/null; then
+  echo "Removing malformed combined runpath: $malformed_rpath"
+  install_name_tool -delete_rpath "$malformed_rpath" "$main_binary"
+fi
+main_rpaths="$(extract_rpaths "$main_binary")"
+if ! grep -Fx '@executable_path/Frameworks' <<< "$main_rpaths" >/dev/null; then
+  echo "Adding Python framework runpath: @executable_path/Frameworks"
+  install_name_tool -add_rpath '@executable_path/Frameworks' "$main_binary"
+fi
+main_rpaths="$(extract_rpaths "$main_binary")"
+if ! grep -Fx '@loader_path/Assets/lib' <<< "$main_rpaths" >/dev/null; then
+  echo "Adding bundled shared-library runpath: @loader_path/Assets/lib"
+  install_name_tool -add_rpath '@loader_path/Assets/lib' "$main_binary"
+fi
+main_rpaths="$(extract_rpaths "$main_binary")"
+if grep -F ';' <<< "$main_rpaths" >/dev/null; then
+  echo "Malformed semicolon-containing LC_RPATH remains in main executable:" >&2
+  printf '%s\n' "$main_rpaths" >&2
+  exit 1
+fi
+require_exact_line "$main_rpaths" "@executable_path/Frameworks" "main executable LC_RPATH"
+require_exact_line "$main_rpaths" "@loader_path/Assets/lib" "main executable LC_RPATH"
+
 python_build="$(xcrun vtool -show-build "$app_path/Frameworks/Python.framework/Python")"
 require_match "$python_build" "platform IOS" "Python.framework build metadata"
 
@@ -280,6 +325,15 @@ mkdir -p "$stage_dir/Payload" "$(dirname "$OUTPUT_IPA")"
 cp -R "$app_path" "$stage_dir/Payload/Blender.app"
 staged_app="$stage_dir/Payload/Blender.app"
 xattr -cr "$staged_app" || true
+require_file "$staged_app/Frameworks/Python.framework/Python" "staged Python.framework binary"
+
+staged_rpaths="$(extract_rpaths "$staged_app/$executable")"
+require_exact_line "$staged_rpaths" "@executable_path/Frameworks" "staged main executable LC_RPATH"
+require_exact_line "$staged_rpaths" "@loader_path/Assets/lib" "staged main executable LC_RPATH"
+if grep -F ';' <<< "$staged_rpaths" >/dev/null; then
+  fail "Staged main executable contains a malformed semicolon LC_RPATH"
+fi
+
 signing_entitlements="$stage_dir/signing-entitlements.plist"
 embedded_entitlements="$stage_dir/embedded-entitlements.plist"
 cp "$FULL_MEMORY_ENTITLEMENTS" "$signing_entitlements"
@@ -327,10 +381,14 @@ fi
   ditto -c -k --sequesterRsrc --keepParent Payload "$OUTPUT_IPA"
 )
 
-archive_entries="$(unzip -Z1 "$OUTPUT_IPA" | wc -l | tr -d ' ')"
+archive_entries_list="$(unzip -Z1 "$OUTPUT_IPA")"
+archive_entries="$(wc -l <<< "$archive_entries_list" | tr -d ' ')"
 if (( archive_entries < ASSET_FILE_MIN )); then
   fail "IPA contains only $archive_entries entries; refusing incomplete archive"
 fi
+require_exact_line "$archive_entries_list" \
+  "Payload/Blender.app/Frameworks/Python.framework/Python" \
+  "IPA archive"
 
 echo "Packaged unsigned IPA: $OUTPUT_IPA"
 echo "Profile: $PROFILE"
