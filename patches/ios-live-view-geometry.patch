@@ -1,0 +1,495 @@
+diff --git a/intern/ghost/intern/GHOST_SystemIOS.mm b/intern/ghost/intern/GHOST_SystemIOS.mm
+index 625fc02948ad2bbb3fc97d9cb0665a780bde7ab8..1402b6df3fd381d9b927460e851ca8bb7f1f3c6a 100644
+--- a/intern/ghost/intern/GHOST_SystemIOS.mm
++++ b/intern/ghost/intern/GHOST_SystemIOS.mm
+@@ -14,6 +14,7 @@
+ #include "GHOST_EventString.hh"
+ #include "GHOST_WindowManager.hh"
+ 
++#include <cmath>
+ #include <memory>
+ 
+ #ifdef WITH_INPUT_NDOF
+@@ -146,6 +147,57 @@ int main_ios_callback(int argc, const char **argv);
+ 
+ @end
+ 
++/* Return the coordinate space UIKit is actually presenting. Scene and screen bounds can
++ * describe a different effective resolution (for example iPad Display Zoom / More Space),
++ * while input events are delivered in the attached root view's logical coordinates. */
++static CGRect ghost_ios_live_view_bounds()
++{
++  UIWindow *fallbackWindow = nil;
++
++  for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
++    if (![scene isKindOfClass:[UIWindowScene class]]) {
++      continue;
++    }
++
++    UIWindowScene *windowScene = (UIWindowScene *)scene;
++    for (UIWindow *candidate in windowScene.windows) {
++      if (!fallbackWindow && !CGRectIsEmpty(candidate.bounds)) {
++        fallbackWindow = candidate;
++      }
++      if (candidate.isKeyWindow) {
++        UIView *rootView = candidate.rootViewController.viewIfLoaded;
++        if (rootView && !CGRectIsEmpty(rootView.bounds)) {
++          return rootView.bounds;
++        }
++        if (!CGRectIsEmpty(candidate.bounds)) {
++          return candidate.bounds;
++        }
++      }
++    }
++  }
++
++  if (fallbackWindow) {
++    UIView *rootView = fallbackWindow.rootViewController.viewIfLoaded;
++    if (rootView && !CGRectIsEmpty(rootView.bounds)) {
++      return rootView.bounds;
++    }
++    if (!CGRectIsEmpty(fallbackWindow.bounds)) {
++      return fallbackWindow.bounds;
++    }
++  }
++
++  for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
++    if ([scene isKindOfClass:[UIWindowScene class]]) {
++      const CGRect screenBounds = ((UIWindowScene *)scene).screen.bounds;
++      if (!CGRectIsEmpty(screenBounds)) {
++        return screenBounds;
++      }
++    }
++  }
++
++  return CGRectMake(0, 0, 1024, 768);
++}
++
+ @implementation GHOST_IOSMetalRenderer
+ {
+   id<MTLDevice> _device;
+@@ -213,6 +265,7 @@ int main_ios_callback(int argc, const char **argv);
+     return;
+   }
+ 
++  system->current_active_window->setNativePixelSize();
+   system->pushEvent(std::make_unique<GHOST_Event>(
+       system->getMilliSeconds(), GHOST_kEventWindowSize, system->current_active_window));
+ }
+@@ -308,34 +361,20 @@ uint8_t GHOST_SystemIOS::getNumDisplays() const
+ 
+ void GHOST_SystemIOS::getMainDisplayDimensions(uint32_t &width, uint32_t &height) const
+ {
+-  /* Use the window scene's screen instead of deprecated [UIScreen mainScreen]. */
+-  UIWindow *keyWindow = nil;
+-  for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+-    if ([scene isKindOfClass:[UIWindowScene class]]) {
+-      UIWindowScene *windowScene = (UIWindowScene *)scene;
+-      for (UIWindow *w in windowScene.windows) {
+-        if (w.isKeyWindow) {
+-          keyWindow = w;
+-          break;
+-        }
+-      }
+-      if (keyWindow) break;
+-    }
+-  }
+-  UIScreen *screen = keyWindow.windowScene.screen ?: [UIScreen mainScreen];
+-  CGRect screenRect = screen.bounds;
+-  CGFloat scaling_fac = screen.scale;
+-  CGFloat screenWidth = screenRect.size.width * scaling_fac;
+-  CGFloat screenHeight = screenRect.size.height * scaling_fac;
++  /* GHOST window bounds and UIKit input are logical points. Keep display dimensions in
++   * that same coordinate space; native drawable scale is reported by the window. */
++  const CGRect liveBounds = ghost_ios_live_view_bounds();
++  CGFloat screenWidth = liveBounds.size.width;
++  CGFloat screenHeight = liveBounds.size.height;
+ 
+   if (screenWidth <= 0 || screenHeight <= 0) {
+     GHOST_ASSERT(false, "Negative or null display dimensions");
+-    screenWidth = 2732;
+-    screenHeight = 2048;
++    screenWidth = 1024;
++    screenHeight = 768;
+   }
+ 
+-  width = screenWidth;
+-  height = screenHeight;
++  width = uint32_t(std::lround(screenWidth));
++  height = uint32_t(std::lround(screenHeight));
+ }
+ 
+ void GHOST_SystemIOS::getAllDisplayDimensions(uint32_t &width, uint32_t &height) const
+@@ -359,23 +398,9 @@ GHOST_IWindow *GHOST_SystemIOS::createWindow(const char *title,
+   GHOST_IWindow *window = NULL;
+   @autoreleasepool {
+ 
+-    /* Create window at native size from the active window scene. */
+-    CGRect bounds = CGRectMake(0, 0, 1024, 768);
+-    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+-      if ([scene isKindOfClass:[UIWindowScene class]]) {
+-        UIWindowScene *windowScene = (UIWindowScene *)scene;
+-        if (@available(iOS 26.0, *)) {
+-          bounds = windowScene.effectiveGeometry.coordinateSpace.bounds;
+-        }
+-        else {
+-#pragma clang diagnostic push
+-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+-          bounds = windowScene.coordinateSpace.bounds;
+-#pragma clang diagnostic pop
+-        }
+-        break;
+-      }
+-    }
++    /* Seed the C++ window with the live UIKit view size. The GHOST window then keeps this
++     * synchronized after attachment and on every subsequent layout change. */
++    const CGRect bounds = ghost_ios_live_view_bounds();
+ 
+     window = (GHOST_IWindow *)new GHOST_WindowIOS(this,
+                                                   title,
+diff --git a/intern/ghost/intern/GHOST_WindowIOS.hh b/intern/ghost/intern/GHOST_WindowIOS.hh
+index 1009d419222250838f55b7dbba8928d82ccd2172..7c0861b75f046b68667faef499157a75c2667f85 100644
+--- a/intern/ghost/intern/GHOST_WindowIOS.hh
++++ b/intern/ghost/intern/GHOST_WindowIOS.hh
+@@ -221,6 +221,9 @@ class GHOST_WindowIOS : public GHOST_Window {
+ 
+   void setNativePixelSize(void);
+ 
++  /** Synchronize GHOST after UIKit establishes or changes the attached root-view geometry. */
++  void viewGeometryDidChange();
++
+   GHOST_TSuccess beginFullScreen() const
+   {
+     return GHOST_kFailure;
+diff --git a/intern/ghost/intern/GHOST_WindowIOS.mm b/intern/ghost/intern/GHOST_WindowIOS.mm
+index f22a48623fa86cd1b981e9017616ed7bbd465166..5c3b874a27e2627a7be9b9fd04016809b8dda806 100644
+--- a/intern/ghost/intern/GHOST_WindowIOS.mm
++++ b/intern/ghost/intern/GHOST_WindowIOS.mm
+@@ -1229,7 +1229,9 @@ typedef struct UserInputEvent {
+ 
+ @interface GHOST_IOSViewController : UIViewController
+ 
+-- (nonnull instancetype)initWithMetalKitView:(nonnull MTKView *)mtkView;
++- (nonnull instancetype)initWithMetalKitView:(nonnull MTKView *)mtkView
++                                   windowIOS:(nonnull GHOST_WindowIOS *)windowIOS;
++- (void)synchronizeViewGeometry;
+ 
+ @end
+ 
+@@ -1237,22 +1239,38 @@ typedef struct UserInputEvent {
+ {
+   MTKView *_view;
+   GHOST_IOSMetalRenderer *_renderer;
++  GHOST_WindowIOS *_windowIOS;
++  CGSize _lastLogicalSize;
++  CGSize _lastDrawableSize;
++  CGFloat _lastContentScale;
+ }
+ 
+ - (nonnull instancetype)initWithMetalKitView:(nonnull MTKView *)mtkView
++                                   windowIOS:(nonnull GHOST_WindowIOS *)windowIOS
+ {
+-  _view = mtkView;
+-  _view.multipleTouchEnabled = YES;
+-  self = [super init];
+-  self.view = (UIView *)mtkView;
++  self = [super initWithNibName:nil bundle:nil];
++  if (self) {
++    _view = mtkView;
++    _windowIOS = windowIOS;
++    _lastLogicalSize = CGSizeMake(-1.0, -1.0);
++    _lastDrawableSize = CGSizeMake(-1.0, -1.0);
++    _lastContentScale = -1.0;
++  }
+ 
+   return self;
+ }
+ 
++- (void)loadView
++{
++  self.view = (UIView *)_view;
++}
++
+ - (void)viewDidLoad
+ {
+   [super viewDidLoad];
+   _view = (MTKView *)self.view;
++  _view.multipleTouchEnabled = YES;
++  _view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+   _view.enableSetNeedsDisplay = NO;
+   _view.device = MTLCreateSystemDefaultDevice();
+   _view.clearColor = MTLClearColorMake(0, 0, 0, 1.0);
+@@ -1260,7 +1278,13 @@ typedef struct UserInputEvent {
+   _view.colorPixelFormat = MTLPixelFormatBGRA8Unorm;
+   _view.autoResizeDrawable = YES;
+   _view.contentMode = UIViewContentModeScaleToFill;
+-  _view.contentScaleFactor = self.view.window.windowScene.screen.scale ?: UITraitCollection.currentTraitCollection.displayScale;
++  CGFloat displayScale = self.view.window.windowScene.screen.scale;
++  if (displayScale <= 0) {
++    displayScale = self.traitCollection.displayScale;
++  }
++  if (displayScale > 0) {
++    _view.contentScaleFactor = displayScale;
++  }
+   /* Use UIUpdateLink for proper ProMotion frame pacing (iOS 18+). */
+   UIUpdateLink *updateLink = [UIUpdateLink updateLinkForView:_view actionTarget:self selector:@selector(updateLinkDidFire:)];
+   updateLink.requiresContinuousUpdates = YES;
+@@ -1274,6 +1298,71 @@ typedef struct UserInputEvent {
+   [_renderer mtkView:_view drawableSizeWillChange:_view.drawableSize];
+ 
+   _view.delegate = _renderer;
++  [self synchronizeViewGeometry];
++}
++
++- (void)synchronizeViewGeometry
++{
++  if (!_windowIOS || !_view.window || CGRectIsEmpty(_view.bounds)) {
++    return;
++  }
++
++  CGFloat displayScale = _view.window.windowScene.screen.scale;
++  if (displayScale <= 0) {
++    displayScale = self.traitCollection.displayScale;
++  }
++  if (displayScale > 0 && fabs(_view.contentScaleFactor - displayScale) > 0.001) {
++    _view.contentScaleFactor = displayScale;
++  }
++
++  const CGSize logicalSize = _view.bounds.size;
++  const CGFloat contentScale = _view.contentScaleFactor;
++  const CGSize expectedDrawableSize = CGSizeMake(
++      std::lround(logicalSize.width * contentScale),
++      std::lround(logicalSize.height * contentScale));
++  if (!CGSizeEqualToSize(_view.drawableSize, expectedDrawableSize)) {
++    _view.drawableSize = expectedDrawableSize;
++  }
++  const CGSize drawableSize = _view.drawableSize;
++  const bool geometryChanged = !CGSizeEqualToSize(logicalSize, _lastLogicalSize) ||
++                               !CGSizeEqualToSize(drawableSize, _lastDrawableSize) ||
++                               fabs(contentScale - _lastContentScale) > 0.001;
++  if (!geometryChanged) {
++    return;
++  }
++
++  _lastLogicalSize = logicalSize;
++  _lastDrawableSize = drawableSize;
++  _lastContentScale = contentScale;
++
++  UIWindowScene *windowScene = _view.window.windowScene;
++  CGRect sceneBounds = CGRectZero;
++  if (@available(iOS 26.0, *)) {
++    sceneBounds = windowScene.effectiveGeometry.coordinateSpace.bounds;
++  }
++  else {
++#pragma clang diagnostic push
++#pragma clang diagnostic ignored "-Wdeprecated-declarations"
++    sceneBounds = windowScene.coordinateSpace.bounds;
++#pragma clang diagnostic pop
++  }
++
++  NSLog(@"Blender iOS geometry: scene=%@ window=%@ view=%@ drawable=%@ scale=%.4f "
++         "nativeScale=%.4f",
++        NSStringFromCGRect(sceneBounds),
++        NSStringFromCGRect(_view.window.bounds),
++        NSStringFromCGRect(_view.bounds),
++        NSStringFromCGSize(drawableSize),
++        contentScale,
++        windowScene.screen.nativeScale);
++
++  _windowIOS->viewGeometryDidChange();
++}
++
++- (void)viewDidLayoutSubviews
++{
++  [super viewDidLayoutSubviews];
++  [self synchronizeViewGeometry];
+ }
+ 
+ - (void)handleGesture:(UIGestureRecognizer *)gestureRecognizer
+@@ -1296,26 +1385,19 @@ typedef struct UserInputEvent {
+ 
+ static UIWindowScene *ghost_ios_active_window_scene()
+ {
++  UIWindowScene *fallbackScene = nil;
+   for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+     if ([scene isKindOfClass:[UIWindowScene class]]) {
+-      return (UIWindowScene *)scene;
+-    }
+-  }
+-  return nil;
+-}
+-
+-static CGRect ghost_ios_window_scene_bounds(UIWindowScene *windowScene)
+-{
+-  if (windowScene) {
+-    if (@available(iOS 26.0, *)) {
+-      return windowScene.effectiveGeometry.coordinateSpace.bounds;
++      UIWindowScene *windowScene = (UIWindowScene *)scene;
++      if (!fallbackScene) {
++        fallbackScene = windowScene;
++      }
++      if (windowScene.activationState == UISceneActivationStateForegroundActive) {
++        return windowScene;
++      }
+     }
+-#pragma clang diagnostic push
+-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+-    return windowScene.coordinateSpace.bounds;
+-#pragma clang diagnostic pop
+   }
+-  return CGRectMake(0, 0, 1024, 768);
++  return fallbackScene;
+ }
+ 
+ static int32_t ghost_ios_round_to_int(CGFloat value)
+@@ -1366,31 +1448,16 @@ GHOST_WindowIOS::GHOST_WindowIOS(GHOST_SystemIOS *systemIos,
+   m_window_title = nullptr;
+ 
+   UIWindowScene *windowScene = ghost_ios_active_window_scene();
+-  const CGRect initial_frame = full_screen_ ? ghost_ios_window_scene_bounds(windowScene) :
+-                                             CGRectMake(left, bottom, width, height);
+-
+-  /* Create MTKView. */
+-  m_metalView = [[MTKView alloc] initWithFrame:initial_frame];
+-  [m_metalView retain];
+-  GHOST_ASSERT(m_metalView, "metalview not valid");
+-
+-  /* Create view controller. */
+   GHOST_ASSERT([UIApplication sharedApplication], "App not valid");
+   GHOST_ASSERT([[UIApplication sharedApplication] delegate], "App not valid");
+ 
+-  GHOSTUIWindow *ghost_rootWindow = nullptr;
+-
+-  if (full_screen_) {
+-    /* Init the main window in the active scene's coordinate space. */
+-    ghost_rootWindow = ghost_ios_window_create(windowScene);
+-    [ghost_rootWindow retain];
+-    ghost_rootWindow.frame = initial_frame;
+-  }
+-  else {
+-    /* Init window at specified size. */
+-    ghost_rootWindow = ghost_ios_window_create(windowScene);
+-    [ghost_rootWindow retain];
+-    ghost_rootWindow.frame = initial_frame;
++  /* Let UIKit establish the fullscreen window's final bounds. In particular, do not assign
++   * effectiveGeometry.coordinateSpace.bounds as a frame: on an iPad using More Space that
++   * can be 1600x1200 while the presented root view is 1376x1032. */
++  GHOSTUIWindow *ghost_rootWindow = ghost_ios_window_create(windowScene);
++  [ghost_rootWindow retain];
++  if (!full_screen_) {
++    ghost_rootWindow.frame = CGRectMake(left, bottom, width, height);
+     [ghost_rootWindow setClipsToBounds:YES];
+   }
+ 
+@@ -1400,9 +1467,18 @@ GHOST_WindowIOS::GHOST_WindowIOS(GHOST_SystemIOS *systemIos,
+   rootWindow.windowLevel = UIWindowLevelAlert;
+ 
+   GHOST_ASSERT(rootWindow, "UIWindow not valid");
+-  m_uiview_controller = [[[GHOST_IOSViewController alloc] initWithMetalKitView:m_metalView]
++
++  CGRect initialViewFrame = rootWindow.bounds;
++  if (CGRectIsEmpty(initialViewFrame)) {
++    initialViewFrame = CGRectMake(0, 0, width, height);
++  }
++  m_metalView = [[MTKView alloc] initWithFrame:initialViewFrame];
++  [m_metalView retain];
++  GHOST_ASSERT(m_metalView, "metalview not valid");
++
++  m_uiview_controller = [[[GHOST_IOSViewController alloc] initWithMetalKitView:m_metalView
++                                                                     windowIOS:this]
+       retain];
+-  [m_uiview_controller viewDidLoad];
+   GHOST_ASSERT(m_uiview_controller, "UIViewController not valid");
+ 
+   /* Set presentation style depending on whether main window, dialog or temporary window. */
+@@ -1416,6 +1492,15 @@ GHOST_WindowIOS::GHOST_WindowIOS(GHOST_SystemIOS *systemIos,
+   }
+   rootWindow.rootViewController = m_uiview_controller;
+ 
++  /* Run UIKit's lifecycle only after the controller is attached to its real window, then
++   * take the attached window bounds as the initial client size. */
++  [m_uiview_controller loadViewIfNeeded];
++  [rootWindow layoutIfNeeded];
++  if (!CGRectIsEmpty(rootWindow.bounds)) {
++    m_metalView.frame = rootWindow.bounds;
++  }
++  [m_metalView layoutIfNeeded];
++
+   /* Create UIView */
+   GHOST_ASSERT(width > 0 && height > 0, "invalid wh");
+   m_uiview = m_uiview_controller.view;
+@@ -1601,6 +1686,17 @@ void GHOST_WindowIOS::getWindowBounds(GHOST_Rect &bounds) const
+ {
+   GHOST_ASSERT(getValid(), "GHOST_WindowIOS::getWindowBounds(): window invalid");
+ 
++  if (full_screen_) {
++    /* A fullscreen iOS window has no decorations. Report the same live logical bounds used
++     * by UIKit input instead of the scene's potentially different effective geometry. */
++    const CGRect viewBounds = m_metalView.bounds;
++    bounds.b_ = ghost_ios_round_to_int(viewBounds.size.height);
++    bounds.l_ = 0;
++    bounds.r_ = ghost_ios_round_to_int(viewBounds.size.width);
++    bounds.t_ = 0;
++    return;
++  }
++
+   const CGRect windowFrame = rootWindow.frame;
+ 
+   bounds.b_ = ghost_ios_round_to_int(windowFrame.origin.y + windowFrame.size.height);
+@@ -1693,6 +1789,23 @@ void GHOST_WindowIOS::setNativePixelSize(void)
+   native_pixel_size_ = float(ghost_ios_window_scale(rootWindow, m_metalView));
+ }
+ 
++void GHOST_WindowIOS::viewGeometryDidChange()
++{
++  setNativePixelSize();
++
++  /* During construction UIKit can lay out the view before GHOST has registered the window.
++   * createWindow() sends the initial size event after registration; subsequent layouts are
++   * delivered here. */
++  if (!m_systemIOS || m_systemIOS->current_active_window != this) {
++    return;
++  }
++
++  m_systemIOS->handleWindowEvent(GHOST_kEventNativeResolutionChange, this);
++  if (m_systemIOS->handleWindowEvent(GHOST_kEventWindowSize, this) == GHOST_kSuccess) {
++    needsDisplayUpdate();
++  }
++}
++
+ /**
+  * \note Fullscreen switch is not actual fullscreen with display capture.
+  * As this capture removes all OS X window manager features.
+@@ -1844,7 +1957,7 @@ const GHOST_TabletData GHOST_WindowIOS::getTabletData()
+ /* This is the size of the window pre-scaled */
+ CGSize GHOST_WindowIOS::getLogicalWindowSize()
+ {
+-  return m_metalView.frame.size;
++  return m_metalView.bounds.size;
+ }
+ 
+ /* This is the size of the window post-scaled */
+@@ -1855,7 +1968,7 @@ CGSize GHOST_WindowIOS::getNativeWindowSize()
+ 
+ float GHOST_WindowIOS::getWindowScaleFactor()
+ {
+-  return rootWindow.screen.scale;
++  return ghost_ios_window_scale(rootWindow, m_metalView);
+ }
+ 
+ /* Indicate that we want this window to be the next active one. */
+@@ -1896,6 +2009,14 @@ bool GHOST_WindowIOS::makeKeyWindow()
+ 
+   /* Make window primary visible window. */
+   [rootWindow makeKeyAndVisible];
++  [rootWindow layoutIfNeeded];
++  if (full_screen_ && !CGRectIsEmpty(rootWindow.bounds) &&
++      !CGRectEqualToRect(m_metalView.frame, rootWindow.bounds))
++  {
++    m_metalView.frame = rootWindow.bounds;
++    [rootWindow layoutIfNeeded];
++  }
++  setNativePixelSize();
+   /* Enable the drawInMTKView() calls for this window. */
+   m_metalView.paused = NO;
+ 
