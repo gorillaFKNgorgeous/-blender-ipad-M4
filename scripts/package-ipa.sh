@@ -158,18 +158,17 @@ if [[ -n "$unconverted_extension" ]]; then
   fail "The app bundle contains an unconverted Python .so outside an iOS framework: $unconverted_extension"
 fi
 
-# A clean bundle is the expected case. Test each small file directly so grep's
-# "no match" status (1) is harmless while actual read errors (>1) still fail.
+# A clean bundle is the expected case. Put grep in an if-condition so its normal
+# "no match" status (1) neither triggers errexit nor the inherited ERR trap.
 lfs_pointers=""
 while IFS= read -r -d '' candidate; do
-  set +e
-  grep -Il '^version https://git-lfs.github.com/spec/v1$' "$candidate" >/dev/null
-  grep_status=$?
-  set -e
-  if (( grep_status == 0 )); then
+  if grep -Il '^version https://git-lfs.github.com/spec/v1$' "$candidate" >/dev/null; then
     lfs_pointers+="${lfs_pointers:+$'\n'}$candidate"
-  elif (( grep_status != 1 )); then
-    fail "Git LFS pointer scan failed for $candidate with status $grep_status"
+  else
+    grep_status=$?
+    if (( grep_status != 1 )); then
+      fail "Git LFS pointer scan failed for $candidate with status $grep_status"
+    fi
   fi
 done < <(find "$app_path/Assets" -type f -size -200c -print0)
 if [[ -n "$lfs_pointers" ]]; then
