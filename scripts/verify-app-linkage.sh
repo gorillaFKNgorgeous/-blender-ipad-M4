@@ -128,8 +128,37 @@ rpaths_of() {  # $1 = mach-o path -> one LC_RPATH per line
   otool -l "$1" 2>/dev/null | awk '/cmd LC_RPATH/{c=1} c && /^ *path /{print $2; c=0}'
 }
 
-rpath_deps_of() {  # $1 = mach-o -> one @rpath/@loader_path/@executable_path dep per line
-  otool -L "$1" 2>/dev/null | awk 'NR>1 && $1 ~ /^@/ {print $1}'
+load_deps_of() {  # $1 = mach-o -> one @-relative LC_LOAD dependency per line
+  # Parse load commands rather than `otool -L`: the first `otool -L` entry for
+  # a dylib/framework is LC_ID_DYLIB (its own identity), not a dependency.
+  otool -l "$1" 2>/dev/null | awk '
+    $1 == "cmd" &&
+      $2 ~ /^LC_(LOAD|LOAD_WEAK|REEXPORT|LOAD_UPWARD|LAZY_LOAD)_DYLIB$/ {
+        want_name = 1
+        next
+      }
+    want_name && $1 == "name" {
+      if ($2 ~ /^@/) print $2
+      want_name = 0
+    }
+  '
+}
+
+expanded_rpath_bases_of() {  # $1 = image -> absolute search bases
+  local image="$1"
+  local image_dir
+  local r
+  local base
+  image_dir="$(dirname "$image")"
+  while IFS= read -r r; do
+    [ -n "$r" ] || continue
+    base="$r"
+    base="${base//@executable_path/$APP}"
+    base="${base//@loader_path/$image_dir}"
+    printf '%s\n' "$base"
+  done <<EOF
+$(rpaths_of "$image")
+EOF
 }
 
 # ---------------------------------------------------------------------------
@@ -175,7 +204,10 @@ while IFS= read -r macho; do
 $(rpaths_of "$macho")
 EOF
 
-  # 3b. every @-relative dependency must resolve against this binary's rpaths
+  # 3b. Every @-relative load dependency must resolve. dyld maintains a
+  # runpath stack: a framework or extension loaded by Blender inherits the
+  # executable's LC_RPATH entries in addition to its own. Keep each entry's
+  # @loader_path anchored to the image that declared that LC_RPATH.
   while IFS= read -r dep; do
     [ -n "$dep" ] || continue
     echo "    needs    $dep" >> "$MANIFEST"
@@ -183,14 +215,12 @@ EOF
     case "$dep" in
       @rpath/*)
         dep_rel="${dep#@rpath/}"
-        while IFS= read -r r; do
-          [ -n "$r" ] || continue
-          base="$r"
-          base="${base//@executable_path/$APP}"
-          base="${base//@loader_path/$loader_dir}"
+        while IFS= read -r base; do
+          [ -n "$base" ] || continue
           if [ -f "$base/$dep_rel" ]; then resolved=1; break; fi
         done <<EOF
-$(rpaths_of "$macho")
+$(expanded_rpath_bases_of "$macho")
+$(if [ "$macho" != "$BIN" ]; then expanded_rpath_bases_of "$BIN"; fi)
 EOF
         ;;
       @executable_path/*|@loader_path/*)
@@ -208,7 +238,7 @@ EOF
       fail=1
     fi
   done <<EOF
-$(rpath_deps_of "$macho")
+$(load_deps_of "$macho")
 EOF
 done < "$MACHO_LIST"
 

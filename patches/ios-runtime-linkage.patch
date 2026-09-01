@@ -1,0 +1,17 @@
+diff --git a/build_files/cmake/platform/platform_apple.cmake b/build_files/cmake/platform/platform_apple.cmake
+--- a/build_files/cmake/platform/platform_apple.cmake
++++ b/build_files/cmake/platform/platform_apple.cmake
+@@ -578,10 +578,10 @@ if(WITH_LLVM)
+ 
+ if(WITH_CYCLES AND WITH_CYCLES_OSL)
+   find_package(OSL 1.13.4 REQUIRED)
++  add_bundled_libraries(osl/lib)
++  # OSL dependency.
++  add_bundled_libraries(openjph/lib)
+ endif()
+-add_bundled_libraries(osl/lib)
+-# OSL dependency
+-add_bundled_libraries(openjph/lib)
+ 
+ if(WITH_CYCLES AND WITH_CYCLES_EMBREE)
+   find_package(Embree 3.8.0 REQUIRED)

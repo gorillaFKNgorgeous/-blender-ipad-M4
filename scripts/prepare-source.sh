@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HARNESS_DIR="$(dirname "$SCRIPT_DIR")"
 IOS_PATCH="$HARNESS_DIR/patches/ios-5.2-m4-full.patch"
 GEOMETRY_PATCH="$HARNESS_DIR/patches/ios-live-view-geometry.patch"
+RUNTIME_LINKAGE_PATCH="$HARNESS_DIR/patches/ios-runtime-linkage.patch"
 CODEC_TRANSFORM="$HARNESS_DIR/scripts/apply-ios-codec-frameworks.py"
 
 SOURCE_DIR="${1:-$PWD/work/blender}"
@@ -74,6 +75,10 @@ if [[ ! -f "$GEOMETRY_PATCH" ]]; then
   echo "Missing iOS live-view geometry patch: $GEOMETRY_PATCH" >&2
   exit 1
 fi
+if [[ ! -f "$RUNTIME_LINKAGE_PATCH" ]]; then
+  echo "Missing iOS runtime linkage patch: $RUNTIME_LINKAGE_PATCH" >&2
+  exit 1
+fi
 if [[ ! -f "$CODEC_TRANSFORM" ]]; then
   echo "Missing iOS codec framework transform: $CODEC_TRANSFORM" >&2
   exit 1
@@ -138,6 +143,8 @@ git -C "$SOURCE_DIR" apply --check "$IOS_PATCH"
 git -C "$SOURCE_DIR" apply "$IOS_PATCH"
 git -C "$SOURCE_DIR" apply --check "$GEOMETRY_PATCH"
 git -C "$SOURCE_DIR" apply "$GEOMETRY_PATCH"
+git -C "$SOURCE_DIR" apply --check "$RUNTIME_LINKAGE_PATCH"
+git -C "$SOURCE_DIR" apply "$RUNTIME_LINKAGE_PATCH"
 python3 "$CODEC_TRANSFORM" "$SOURCE_DIR"
 git -C "$SOURCE_DIR" diff --check
 
@@ -145,6 +152,7 @@ version_header="$SOURCE_DIR/source/blender/blenkernel/BKE_blender_version.h"
 input_system="$SOURCE_DIR/intern/ghost/intern/GHOST_SystemIOS.mm"
 input_window_header="$SOURCE_DIR/intern/ghost/intern/GHOST_WindowIOS.hh"
 input_window="$SOURCE_DIR/intern/ghost/intern/GHOST_WindowIOS.mm"
+platform_apple="$SOURCE_DIR/build_files/cmake/platform/platform_apple.cmake"
 info_plist="$SOURCE_DIR/release/ios/Blender.app/Info.plist"
 bundle_script="$SOURCE_DIR/release/ios/scripts/copy_bundle_data.sh"
 python_compat_header="$SOURCE_DIR/source/blender/python/generic/python_compat.hh"
@@ -185,6 +193,12 @@ if grep -Fq 'ghost_ios_window_scene_bounds' "$input_window"; then
 fi
 if grep -Fq '[m_uiview_controller viewDidLoad];' "$input_window"; then
   echo "The UIKit view lifecycle is still being invoked manually before attachment." >&2
+  exit 1
+fi
+grep -Fq '  add_bundled_libraries(osl/lib)' "$platform_apple"
+grep -Fq '  add_bundled_libraries(openjph/lib)' "$platform_apple"
+if grep -Eq '^add_bundled_libraries\((osl|openjph)/lib\)' "$platform_apple"; then
+  echo "Disabled OSL runtime libraries would still be copied into the iOS bundle." >&2
   exit 1
 fi
 test "$(grep -Fc -- '- (void)pushIndirectPointerCursorEvent' "$input_window")" -eq 1
@@ -229,5 +243,6 @@ macOS host libraries: $actual_macos_lib_ref
 Bundle identifier: $BUNDLE_ID
 Compatibility patch SHA-256: $(shasum -a 256 "$IOS_PATCH" | awk '{print $1}')
 Live-view geometry patch SHA-256: $(shasum -a 256 "$GEOMETRY_PATCH" | awk '{print $1}')
+iOS runtime linkage patch SHA-256: $(shasum -a 256 "$RUNTIME_LINKAGE_PATCH" | awk '{print $1}')
 Codec framework transform SHA-256: $(shasum -a 256 "$CODEC_TRANSFORM" | awk '{print $1}')
 EOF
