@@ -882,6 +882,7 @@ jobs:
             echo "macOS libraries: $(git -C "$SOURCE_DIR/lib/macos_arm64" rev-parse HEAD)"
             echo "Compatibility patch: $(shasum -a 256 patches/ios-5.2-m4-full.patch | awk '{print $1}')"
             echo "Live-view geometry patch: $(shasum -a 256 patches/ios-live-view-geometry.patch | awk '{print $1}')"
+            echo "Native Files patch: $(shasum -a 256 patches/ios-native-files.patch | awk '{print $1}')"
             echo "Runtime linkage patch: $(shasum -a 256 patches/ios-runtime-linkage.patch | awk '{print $1}')"
             echo "Codec framework patch: $(shasum -a 256 patches/ios-codec-frameworks.patch | awk '{print $1}')"
             echo "NumPy iOS patch: $(shasum -a 256 patches/numpy-2.3.4-ios-support.diff | awk '{print $1}')"

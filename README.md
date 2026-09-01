@@ -9,7 +9,7 @@ This branch builds a full-capability Blender 5.2 LTS iPad application for an iPa
 - macOS host-tool bundle: `a3e20428fb0ab2231903608cdca90301e130dbfc`.
 - Minimum deployment target: iPadOS 26.0. The intended device is iPadOS 27 on a 1 TB M4 iPad Pro.
 
-The compatibility patch repairs a malformed Objective-C method placement in the public head, retains queried mouse-button state and indirect pointer declarations from our last working input branch, preserves Blender's extension manager, bundles USD/MaterialX runtime data, and gives high-memory iPads an M4-class shader-compilation policy.
+The compatibility patch repairs a malformed Objective-C method placement in the public head, retains queried mouse-button state and indirect pointer declarations from our last working input branch, preserves Blender's extension manager, bundles USD/MaterialX runtime data, and gives high-memory iPads an M4-class shader-compilation policy. The native Files patch opens provider documents in place, retains their security-scoped URLs, and routes each picker result back to the Blender window that opened it.
 
 ## Capability policy
 

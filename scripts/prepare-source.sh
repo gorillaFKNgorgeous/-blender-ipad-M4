@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 HARNESS_DIR="$(dirname "$SCRIPT_DIR")"
 IOS_PATCH="$HARNESS_DIR/patches/ios-5.2-m4-full.patch"
 GEOMETRY_PATCH="$HARNESS_DIR/patches/ios-live-view-geometry.patch"
+NATIVE_FILES_PATCH="$HARNESS_DIR/patches/ios-native-files.patch"
 RUNTIME_LINKAGE_PATCH="$HARNESS_DIR/patches/ios-runtime-linkage.patch"
 CODEC_TRANSFORM="$HARNESS_DIR/scripts/apply-ios-codec-frameworks.py"
 
@@ -73,6 +74,10 @@ if [[ ! -f "$IOS_PATCH" ]]; then
 fi
 if [[ ! -f "$GEOMETRY_PATCH" ]]; then
   echo "Missing iOS live-view geometry patch: $GEOMETRY_PATCH" >&2
+  exit 1
+fi
+if [[ ! -f "$NATIVE_FILES_PATCH" ]]; then
+  echo "Missing iOS native Files patch: $NATIVE_FILES_PATCH" >&2
   exit 1
 fi
 if [[ ! -f "$RUNTIME_LINKAGE_PATCH" ]]; then
@@ -143,6 +148,8 @@ git -C "$SOURCE_DIR" apply --check "$IOS_PATCH"
 git -C "$SOURCE_DIR" apply "$IOS_PATCH"
 git -C "$SOURCE_DIR" apply --check "$GEOMETRY_PATCH"
 git -C "$SOURCE_DIR" apply "$GEOMETRY_PATCH"
+git -C "$SOURCE_DIR" apply --check "$NATIVE_FILES_PATCH"
+git -C "$SOURCE_DIR" apply "$NATIVE_FILES_PATCH"
 git -C "$SOURCE_DIR" apply --check "$RUNTIME_LINKAGE_PATCH"
 git -C "$SOURCE_DIR" apply "$RUNTIME_LINKAGE_PATCH"
 python3 "$CODEC_TRANSFORM" "$SOURCE_DIR"
@@ -152,6 +159,7 @@ version_header="$SOURCE_DIR/source/blender/blenkernel/BKE_blender_version.h"
 input_system="$SOURCE_DIR/intern/ghost/intern/GHOST_SystemIOS.mm"
 input_window_header="$SOURCE_DIR/intern/ghost/intern/GHOST_WindowIOS.hh"
 input_window="$SOURCE_DIR/intern/ghost/intern/GHOST_WindowIOS.mm"
+native_files="$SOURCE_DIR/intern/ghost/intern/GHOST_FilePickerIOS.mm"
 platform_apple="$SOURCE_DIR/build_files/cmake/platform/platform_apple.cmake"
 info_plist="$SOURCE_DIR/release/ios/Blender.app/Info.plist"
 bundle_script="$SOURCE_DIR/release/ios/scripts/copy_bundle_data.sh"
@@ -187,6 +195,15 @@ grep -Fq '_view.drawableSize = expectedDrawableSize;' "$input_window"
 grep -Fq '[m_uiview_controller loadViewIfNeeded];' "$input_window"
 grep -Fq 'm_metalView.frame = rootWindow.bounds;' "$input_window"
 grep -Fq 'return m_metalView.bounds.size;' "$input_window"
+grep -Fq 'initForOpeningContentTypes:contentTypes' "$native_files"
+grep -Fq 'asCopy:NO' "$native_files"
+grep -Fq 'delegate.ghostWindow = originWindow;' "$native_files"
+grep -Fq '[self deliverResultURL:url];' "$native_files"
+grep -Fq 'window->needsDisplayUpdate();' "$native_files"
+if grep -Fxq '    [url startAccessingSecurityScopedResource];' "$native_files"; then
+  echo "The native Files delegate would leak an unbalanced security-scope access." >&2
+  exit 1
+fi
 if grep -Fq 'ghost_ios_window_scene_bounds' "$input_window"; then
   echo "Fullscreen window sizing still depends on scene effective geometry." >&2
   exit 1
@@ -247,6 +264,7 @@ macOS host libraries: $actual_macos_lib_ref
 Bundle identifier: $BUNDLE_ID
 Compatibility patch SHA-256: $(shasum -a 256 "$IOS_PATCH" | awk '{print $1}')
 Live-view geometry patch SHA-256: $(shasum -a 256 "$GEOMETRY_PATCH" | awk '{print $1}')
+Native Files patch SHA-256: $(shasum -a 256 "$NATIVE_FILES_PATCH" | awk '{print $1}')
 iOS runtime linkage patch SHA-256: $(shasum -a 256 "$RUNTIME_LINKAGE_PATCH" | awk '{print $1}')
 Codec framework transform SHA-256: $(shasum -a 256 "$CODEC_TRANSFORM" | awk '{print $1}')
 EOF

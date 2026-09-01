@@ -1,0 +1,267 @@
+diff --git a/intern/ghost/intern/GHOST_FilePickerIOS.mm b/intern/ghost/intern/GHOST_FilePickerIOS.mm
+index 101af9d4..bf0b5f18 100644
+--- a/intern/ghost/intern/GHOST_FilePickerIOS.mm
++++ b/intern/ghost/intern/GHOST_FilePickerIOS.mm
+@@ -81,24 +81,82 @@ void *GHOST_ios_lookupSecurityScopedURL(const char *filepath)
+  */
+ @interface GHOST_IOSFilePickerDelegate
+     : NSObject <UIDocumentPickerDelegate, UIAdaptivePresentationControllerDelegate>
+ @property(nonatomic, assign) GHOST_SystemIOS *ghostSystem;
++/** The Blender window that opened the picker. UIKit may change active-window state while the
++ * document browser is presented, so the callback must not rediscover this afterward. */
++@property(nonatomic, assign) GHOST_WindowIOS *ghostWindow;
++/** UIKit can report both a picker callback and an adaptive-presentation dismissal. */
++@property(nonatomic, assign) BOOL resultDelivered;
+ /** For save-to-folder mode: the default filename to append to the chosen directory. */
+ @property(nonatomic, copy) NSString *defaultFilename;
++- (void)deliverResultURL:(NSURL *)url;
+ @end
+ 
+ @implementation GHOST_IOSFilePickerDelegate
+ 
++- (void)deliverResultURL:(NSURL *)url
++{
++  if (_resultDelivered) {
++    return;
++  }
++  _resultDelivered = YES;
++
++  GHOST_SystemIOS *system = _ghostSystem;
++  if (!system) {
++    return;
++  }
++
++  /* Prefer the window that initiated the dialog. The system's active window can temporarily
++   * change while UIDocumentPickerViewController owns the presentation. */
++  GHOST_WindowIOS *window = _ghostWindow;
++  if (!window || !system->validWindow(window)) {
++    window = system->current_active_window;
++  }
++  if (!window || !system->validWindow(window)) {
++    NSLog(@"Blender Files: no valid Blender window for the document-picker result");
++    return;
++  }
++
++  char *pathCopy = nullptr;
++  if (url) {
++    storeSecurityScopedURL(url);
++
++    const char *path = url.fileSystemRepresentation;
++    if (!path) {
++      NSLog(@"Blender Files: selected URL has no file-system representation");
++      return;
++    }
++
++    const size_t pathLen = strlen(path);
++    pathCopy = static_cast<char *>(malloc(pathLen + 1));
++    if (!pathCopy) {
++      NSLog(@"Blender Files: could not allocate the selected path");
++      return;
++    }
++    memcpy(pathCopy, path, pathLen + 1);
++  }
++
++  system->pushEvent(std::make_unique<GHOST_EventString>(
++      system->getMilliSeconds(),
++      GHOST_kEventNativeFileDialogResult,
++      window,
++      static_cast<GHOST_TEventDataPtr>(pathCopy)));
++  system->notifyExternalEventProcessed();
++  window->needsDisplayUpdate();
++
++  NSLog(@"Blender Files: delivered %@ from the native document picker",
++        url ? url.lastPathComponent : @"cancel");
++}
++
+ - (void)documentPicker:(UIDocumentPickerViewController *)controller
+     didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls
+ {
+   if (urls.count > 0) {
+     NSURL *url = urls.firstObject;
+ 
+-    /* Start security-scoped access so Blender can read/write the file. */
+-    [url startAccessingSecurityScopedResource];
+-
+-    /* Store the original security-scoped URL for later access (e.g., saving). */
++    /* Preserve the original security-scoped directory URL before appending the save name.
++     * Access itself is balanced around Blender's operator and file I/O, not here. */
+     storeSecurityScopedURL(url);
+ 
+     /* For save-to-folder: the user picked a directory, append the default filename. */
+     if (_defaultFilename.length > 0) {
+@@ -106,36 +164,18 @@ void *GHOST_ios_lookupSecurityScopedURL(const char *filepath)
+       storeSecurityScopedURL(fileURL);
+       url = fileURL;
+     }
+ 
+-    const char *path = [url.path UTF8String];
+-    const size_t pathLen = strlen(path);
+-    char *pathCopy = (char *)malloc(pathLen + 1);
+-    memcpy(pathCopy, path, pathLen + 1);
+-
+-    GHOST_WindowIOS *window = _ghostSystem->current_active_window;
+-    _ghostSystem->pushEvent(std::make_unique<GHOST_EventString>(
+-        _ghostSystem->getMilliSeconds(),
+-        GHOST_kEventNativeFileDialogResult,
+-        window,
+-        static_cast<GHOST_TEventDataPtr>(pathCopy)));
+-    _ghostSystem->notifyExternalEventProcessed();
++    [self deliverResultURL:url];
+   }
+   else {
+     [self documentPickerWasCancelled:controller];
+   }
+ }
+ 
+ - (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller
+ {
+-  /* Push a cancel event (nullptr data). */
+-  GHOST_WindowIOS *window = _ghostSystem->current_active_window;
+-  _ghostSystem->pushEvent(std::make_unique<GHOST_EventString>(
+-      _ghostSystem->getMilliSeconds(),
+-      GHOST_kEventNativeFileDialogResult,
+-      window,
+-      static_cast<GHOST_TEventDataPtr>(nullptr)));
+-  _ghostSystem->notifyExternalEventProcessed();
++  [self deliverResultURL:nil];
+ }
+ 
+ - (void)presentationControllerDidDismiss:(UIPresentationController *)presentationController
+ {
+@@ -156,8 +196,10 @@ GHOST_TSuccess GHOST_SystemIOS::showNativeFileDialog(const char *title,
+     if (!current_active_window) {
+       return GHOST_kFailure;
+     }
+ 
++    GHOST_WindowIOS *originWindow = current_active_window;
++
+     /* Build an array of UTTypes from the filter_glob.
+      * Supported patterns: "*.blend", "*.png;*.jpg", etc.
+      * Falls back to UTTypeData (all files) if nothing specific matches. */
+     NSMutableArray<UTType *> *contentTypes = [NSMutableArray array];
+@@ -201,9 +243,13 @@ GHOST_TSuccess GHOST_SystemIOS::showNativeFileDialog(const char *title,
+     /* Extract the default filename from default_path for save operations. */
+     NSString *saveFilename = nil;
+ 
+     if (action == GHOST_kFileDialogOpen) {
+-      picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:contentTypes];
++      /* Open in place. Copy-mode leaves the picker on screen while a provider copies a large
++       * .blend file into the app container, which looks like the tap was ignored. Blender already
++       * brackets its reads with security-scoped access, so in-place URLs are the correct model. */
++      picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:contentTypes
++                                                                           asCopy:NO];
+       picker.allowsMultipleSelection = NO;
+     }
+     else {
+       /* For save, use a folder picker. The user picks a destination directory, and Blender
+@@ -219,9 +265,10 @@ GHOST_TSuccess GHOST_SystemIOS::showNativeFileDialog(const char *title,
+         }
+       }
+ 
+       picker = [[UIDocumentPickerViewController alloc]
+-          initForOpeningContentTypes:@[ UTTypeFolder ]];
++          initForOpeningContentTypes:@[ UTTypeFolder ]
++                               asCopy:NO];
+       picker.allowsMultipleSelection = NO;
+     }
+ 
+     if (!picker) {
+@@ -231,11 +278,13 @@ GHOST_TSuccess GHOST_SystemIOS::showNativeFileDialog(const char *title,
+     /* Create and retain the delegate. The delegate will be released when the picker is dismissed.
+      * We use objc_setAssociatedObject to tie its lifetime to the picker. */
+     GHOST_IOSFilePickerDelegate *delegate = [[GHOST_IOSFilePickerDelegate alloc] init];
+     delegate.ghostSystem = this;
++    delegate.ghostWindow = originWindow;
+     delegate.defaultFilename = saveFilename;
+     picker.delegate = delegate;
+     picker.presentationController.delegate = delegate;
++    picker.shouldShowFileExtensions = YES;
+ 
+     /* Tie delegate lifetime to picker via associated object. */
+     objc_setAssociatedObject(
+         picker, "ghost_delegate", delegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+@@ -260,9 +309,9 @@ GHOST_TSuccess GHOST_SystemIOS::showNativeFileDialog(const char *title,
+       }
+     }
+ 
+     /* Present the picker from the root view controller. */
+-    UIWindow *uiWindow = current_active_window->rootWindow;
++    UIWindow *uiWindow = originWindow->rootWindow;
+     UIViewController *rootVC = uiWindow.rootViewController;
+     if (!rootVC) {
+       return GHOST_kFailure;
+     }
+@@ -294,19 +343,9 @@ GHOST_TSuccess GHOST_SystemIOS::showNativeFileDialog(const char *title,
+ 
+       [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"
+                                                 style:UIAlertActionStyleCancel
+                                               handler:^(UIAlertAction *_Nonnull a) {
+-                                                /* Push a cancel event. */
+-                                                GHOST_WindowIOS *window =
+-                                                    this->current_active_window;
+-                                                this->pushEvent(
+-                                                    std::make_unique<GHOST_EventString>(
+-                                                        this->getMilliSeconds(),
+-                                                        GHOST_kEventNativeFileDialogResult,
+-                                                        window,
+-                                                        static_cast<GHOST_TEventDataPtr>(
+-                                                            nullptr)));
+-                                                this->notifyExternalEventProcessed();
++                                                [delegate deliverResultURL:nil];
+                                               }]];
+ 
+       [alert
+           addAction:[UIAlertAction
+@@ -319,9 +358,12 @@ GHOST_TSuccess GHOST_SystemIOS::showNativeFileDialog(const char *title,
+                                   }
+                                   /* Now show the folder picker. */
+                                   [rootVC presentViewController:picker
+                                                        animated:YES
+-                                                     completion:nil];
++                                                     completion:^{
++                                                       picker.presentationController.delegate =
++                                                           delegate;
++                                                     }];
+                                 }]];
+ 
+       UIViewController *presenter = rootVC.presentedViewController ?: rootVC;
+       if (presenter.presentedViewController) {
+@@ -342,13 +384,20 @@ GHOST_TSuccess GHOST_SystemIOS::showNativeFileDialog(const char *title,
+         [rootVC dismissViewControllerAnimated:NO
+                                    completion:^{
+                                      [rootVC presentViewController:picker
+                                                           animated:YES
+-                                                        completion:nil];
++                                                        completion:^{
++                                                          picker.presentationController.delegate =
++                                                              delegate;
++                                                        }];
+                                    }];
+       }
+       else {
+-        [rootVC presentViewController:picker animated:YES completion:nil];
++        [rootVC presentViewController:picker
++                             animated:YES
++                           completion:^{
++                             picker.presentationController.delegate = delegate;
++                           }];
+       }
+     }
+ 
+     return GHOST_kSuccess;
+diff --git a/intern/ghost/intern/GHOST_SystemIOS.mm b/intern/ghost/intern/GHOST_SystemIOS.mm
+index 95d66769..52118a2f 100644
+--- a/intern/ghost/intern/GHOST_SystemIOS.mm
++++ b/intern/ghost/intern/GHOST_SystemIOS.mm
+@@ -76,8 +76,11 @@ int main_ios_callback(int argc, const char **argv);
+             options:(NSDictionary<UIApplicationOpenURLOptionsKey, id> *)options
+ {
+   GHOST_SystemIOS *system = static_cast<GHOST_SystemIOS *>(GHOST_ISystem::getSystem());
+ 
++  /* Preserve the provider-issued URL. Rebuilding an NSURL from url.path loses the sandbox
++   * extension, so files launched directly from the Files app would otherwise be unreadable. */
++  GHOST_ios_storeSecurityScopedURL((__bridge void *)url);
+   system->handleOpenDocumentRequest(url.path);
+ 
+   return YES;
+ }
