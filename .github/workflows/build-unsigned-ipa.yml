@@ -827,7 +827,7 @@ jobs:
             -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0 \
             -DCMAKE_XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET=26.0 \
             -DCMAKE_XCODE_ATTRIBUTE_FRAMEWORK_SEARCH_PATHS="$SOURCE_DIR/lib/ios_arm64/python" \
-            -DCMAKE_XCODE_ATTRIBUTE_LD_RUNPATH_SEARCH_PATHS="@executable_path/Frameworks;@loader_path/Assets/lib" \
+            -DCMAKE_XCODE_ATTRIBUTE_LD_RUNPATH_SEARCH_PATHS='$(inherited) @executable_path/Frameworks @loader_path/Assets/lib' \
             -DCMAKE_XCODE_GENERATE_SCHEME=ON \
             -DCMAKE_BUILD_TYPE=Release \
             -DBLENDER_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
@@ -902,6 +902,9 @@ jobs:
             EXPANDED_CODE_SIGN_IDENTITY=- \
             COMPILER_INDEX_STORE_ENABLE=NO \
             build 2>&1 | tee "$GITHUB_WORKSPACE/xcodebuild.log"
+
+      - name: Embed and verify Python.framework
+        run: bash ./scripts/verify-app-linkage.sh "$BUILD_DIR" "$SOURCE_DIR"
 
       - name: Package full-memory and Signulous fallback IPAs
         run: |
