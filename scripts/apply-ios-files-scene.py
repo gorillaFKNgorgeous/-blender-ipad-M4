@@ -121,8 +121,8 @@ static void blender_ios_queueOpenURL(NSURL *url, NSString *source)
   GHOST_ios_logFileEvent(
       (__bridge void *)@\"FILES_LIFECYCLE_V2 + FILES_SCENE_V3 app launch began; waiting for UIWindowScene\");
 
-  /* A scene-based launch normally supplies document URLs through UISceneConnectionOptions. Keep
-   * this legacy application-level URL only as a compatibility fallback. */
+  /* Scene-based launches deliver document URLs through UISceneConnectionOptions. Keep the
+   * application-level URL only as a compatibility fallback. */
   NSURL *launchURL = launchOptions[UIApplicationLaunchOptionsURLKey];
   if (launchURL) {
     blender_ios_queueOpenURL(launchURL, @\"application launch fallback\");
@@ -131,9 +131,7 @@ static void blender_ios_queueOpenURL(NSURL *url, NSString *source)
     GHOST_ios_logFileEvent((__bridge void *)@\"application launch has no legacy document URL\");
   }
 
-  /* Do not create Blender's Metal window here. At this point UIKit has not yet handed us the
-   * UIWindowScene that owns the document lifecycle. IOSSceneDelegate bootstraps Blender from
-   * scene:willConnectToSession:options: instead. */
+  /* Blender must create its Metal UIWindow inside the actual UIWindowScene lifecycle. */
   return YES;
 }
 """,
@@ -169,15 +167,14 @@ static void blender_ios_queueOpenURL(NSURL *url, NSString *source)
         "programmatic UIWindowScene configuration",
     )
 
+    # ios-live-view-geometry.patch intentionally places its live-geometry helper between the
+    # app delegate's @end and the renderer implementation. Anchor on the renderer itself instead
+    # of assuming those two tokens are adjacent. Run 75 failed only because the previous transform
+    # made that adjacency assumption.
     replace_once(
         system,
-        """@end
-
-@implementation GHOST_IOSMetalRenderer
-""",
-        """@end
-
-@implementation IOSSceneDelegate
+        "@implementation GHOST_IOSMetalRenderer\n",
+        """@implementation IOSSceneDelegate
 
 - (void)retainBlenderWindowForScene:(UIWindowScene *)windowScene
 {
@@ -253,7 +250,8 @@ static void blender_ios_queueOpenURL(NSURL *url, NSString *source)
 
 - (void)sceneDidBecomeActive:(UIScene *)scene
 {
-  GHOST_ios_logFileEvent((__bridge void *)@\"scene became active; retaining window and flushing URL queue\");
+  GHOST_ios_logFileEvent(
+      (__bridge void *)@\"scene became active; retaining window and flushing URL queue\");
   if ([scene isKindOfClass:[UIWindowScene class]]) {
     [self retainBlenderWindowForScene:(UIWindowScene *)scene];
   }
@@ -305,6 +303,7 @@ static void blender_ios_queueOpenURL(NSURL *url, NSString *source)
     require_once(system, "FILES_SCENE_V3", "scene lifecycle marker")
     require_once(system, "@interface IOSSceneDelegate : UIResponder <UIWindowSceneDelegate>",
                  "scene delegate declaration")
+    require_once(system, "@implementation IOSSceneDelegate", "scene delegate implementation")
     require_once(system, "configuration.delegateClass = [IOSSceneDelegate class];",
                  "scene delegate configuration")
     require_once(system, "willConnectToSession:(UISceneSession *)session",
