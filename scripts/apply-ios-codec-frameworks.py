@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 import sys
 
 
@@ -243,6 +244,11 @@ def dll_path(lib_name, lib_display_name) -> Path | None:
         return False
     exists = path.exists() and path.is_file()
 """, "graceful missing glTF codec capability")
+
+    scene_transform = Path(__file__).with_name("apply-ios-files-scene.py")
+    if not scene_transform.is_file():
+        raise RuntimeError(f"Missing iOS Files scene transform: {scene_transform}")
+    subprocess.run([sys.executable, str(scene_transform), str(root)], check=True)
 
     print("iOS codec framework source transform completed successfully")
     return 0
