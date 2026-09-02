@@ -116,6 +116,20 @@ if (( asset_file_count < ASSET_FILE_MIN )); then
 fi
 echo "Verified bundle identity, version, and $asset_file_count asset files"
 
+launch_storyboard="$(/usr/libexec/PlistBuddy -c 'Print :UILaunchStoryboardName' "$plist")"
+[[ "$launch_storyboard" == "Main" ]] || \
+  fail "Unexpected launch storyboard: $launch_storyboard (expected Main)"
+if /usr/libexec/PlistBuddy -c 'Print :UIMainStoryboardFile' "$plist" >/dev/null 2>&1; then
+  fail "Packaged app would create a second storyboard-owned application window"
+fi
+if /usr/libexec/PlistBuddy -c 'Print :UISupportsDocumentBrowser' "$plist" >/dev/null 2>&1; then
+  fail "Packaged app falsely claims a UIDocumentBrowserViewController root"
+fi
+/usr/libexec/PlistBuddy -c 'Print :UIFileSharingEnabled' "$plist" | grep -Fx true >/dev/null
+/usr/libexec/PlistBuddy -c 'Print :LSSupportsOpeningDocumentsInPlace' "$plist" | \
+  grep -Fx true >/dev/null
+echo "Verified single-window native Files lifecycle configuration"
+
 python_os="$(find "$app_path/Assets" -type f -path '*/python/lib/python3.13/os.py' -print -quit)"
 bl_pkg="$(find "$app_path/Assets" -type f -path '*/scripts/addons_core/bl_pkg/__init__.py' -print -quit)"
 cycles_props="$(find "$app_path/Assets" -type f -path '*/scripts/addons_core/cycles/properties.py' -print -quit)"
@@ -272,6 +286,11 @@ main_lipo="$(lipo -info "$main_binary")"
 require_match "$main_lipo" "arm64" "main executable architecture"
 main_loads="$(otool -L "$main_binary")"
 require_match "$main_loads" "@rpath/Python.framework/Python" "main executable linkage"
+strings "$main_binary" | grep -F 'FILES_LIFECYCLE_V2' >/dev/null || \
+  fail "Main executable does not contain the native Files lifecycle marker"
+strings "$main_binary" | grep -F 'BlenderFiles.log' >/dev/null || \
+  fail "Main executable does not contain persistent Files diagnostics"
+echo "Verified native Files lifecycle code is present in the main executable"
 
 # CMAKE_XCODE_ATTRIBUTE_LD_RUNPATH_SEARCH_PATHS can serialize a semicolon-separated
 # CMake list as one literal LC_RPATH. That produced the launch crash where dyld searched

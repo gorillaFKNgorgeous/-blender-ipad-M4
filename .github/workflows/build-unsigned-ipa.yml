@@ -884,6 +884,7 @@ jobs:
             echo "Live-view geometry patch: $(shasum -a 256 patches/ios-live-view-geometry.patch | awk '{print $1}')"
             echo "Native Files patch: $(shasum -a 256 patches/ios-native-files.patch | awk '{print $1}')"
             echo "Runtime linkage patch: $(shasum -a 256 patches/ios-runtime-linkage.patch | awk '{print $1}')"
+            echo "Files lifecycle patch: $(shasum -a 256 patches/ios-files-lifecycle-v2.patch | awk '{print $1}')"
             echo "Codec framework patch: $(shasum -a 256 patches/ios-codec-frameworks.patch | awk '{print $1}')"
             echo "NumPy iOS patch: $(shasum -a 256 patches/numpy-2.3.4-ios-support.diff | awk '{print $1}')"
             echo "NumPy fwork patch: $(shasum -a 256 patches/numpy-2.3.4-fwork-bundle-root.diff | awk '{print $1}')"

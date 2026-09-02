@@ -8,6 +8,7 @@ IOS_PATCH="$HARNESS_DIR/patches/ios-5.2-m4-full.patch"
 GEOMETRY_PATCH="$HARNESS_DIR/patches/ios-live-view-geometry.patch"
 NATIVE_FILES_PATCH="$HARNESS_DIR/patches/ios-native-files.patch"
 RUNTIME_LINKAGE_PATCH="$HARNESS_DIR/patches/ios-runtime-linkage.patch"
+FILES_LIFECYCLE_PATCH="$HARNESS_DIR/patches/ios-files-lifecycle-v2.patch"
 CODEC_TRANSFORM="$HARNESS_DIR/scripts/apply-ios-codec-frameworks.py"
 
 SOURCE_DIR="${1:-$PWD/work/blender}"
@@ -84,6 +85,10 @@ if [[ ! -f "$RUNTIME_LINKAGE_PATCH" ]]; then
   echo "Missing iOS runtime linkage patch: $RUNTIME_LINKAGE_PATCH" >&2
   exit 1
 fi
+if [[ ! -f "$FILES_LIFECYCLE_PATCH" ]]; then
+  echo "Missing iOS Files lifecycle patch: $FILES_LIFECYCLE_PATCH" >&2
+  exit 1
+fi
 if [[ ! -f "$CODEC_TRANSFORM" ]]; then
   echo "Missing iOS codec framework transform: $CODEC_TRANSFORM" >&2
   exit 1
@@ -152,6 +157,8 @@ git -C "$SOURCE_DIR" apply --check "$NATIVE_FILES_PATCH"
 git -C "$SOURCE_DIR" apply "$NATIVE_FILES_PATCH"
 git -C "$SOURCE_DIR" apply --check "$RUNTIME_LINKAGE_PATCH"
 git -C "$SOURCE_DIR" apply "$RUNTIME_LINKAGE_PATCH"
+git -C "$SOURCE_DIR" apply --check "$FILES_LIFECYCLE_PATCH"
+git -C "$SOURCE_DIR" apply "$FILES_LIFECYCLE_PATCH"
 python3 "$CODEC_TRANSFORM" "$SOURCE_DIR"
 git -C "$SOURCE_DIR" diff --check
 
@@ -159,12 +166,14 @@ version_header="$SOURCE_DIR/source/blender/blenkernel/BKE_blender_version.h"
 input_system="$SOURCE_DIR/intern/ghost/intern/GHOST_SystemIOS.mm"
 input_window_header="$SOURCE_DIR/intern/ghost/intern/GHOST_WindowIOS.hh"
 input_window="$SOURCE_DIR/intern/ghost/intern/GHOST_WindowIOS.mm"
+native_files_header="$SOURCE_DIR/intern/ghost/intern/GHOST_FilePickerIOS.hh"
 native_files="$SOURCE_DIR/intern/ghost/intern/GHOST_FilePickerIOS.mm"
 platform_apple="$SOURCE_DIR/build_files/cmake/platform/platform_apple.cmake"
 info_plist="$SOURCE_DIR/release/ios/Blender.app/Info.plist"
 bundle_script="$SOURCE_DIR/release/ios/scripts/copy_bundle_data.sh"
 python_compat_header="$SOURCE_DIR/source/blender/python/generic/python_compat.hh"
 python_compat_source="$SOURCE_DIR/source/blender/python/generic/python_compat.cc"
+python_interface="$SOURCE_DIR/source/blender/python/intern/bpy_interface.cc"
 draco_dependency_cmake="$SOURCE_DIR/build_files/build_environment/cmake/draco.cmake"
 meshopt_dependency_cmake="$SOURCE_DIR/build_files/build_environment/cmake/meshoptimizer.cmake"
 draco_bridge_cmake="$SOURCE_DIR/intern/draco_bridge/CMakeLists.txt"
@@ -200,6 +209,23 @@ grep -Fq 'asCopy:NO' "$native_files"
 grep -Fq 'delegate.ghostWindow = originWindow;' "$native_files"
 grep -Fq '[self deliverResultURL:url];' "$native_files"
 grep -Fq 'window->needsDisplayUpdate();' "$native_files"
+grep -Fq 'BlenderFiles.log' "$native_files"
+grep -Fq 'GHOST_ios_logFileEvent' "$native_files_header"
+grep -Fq 'FILES_LIFECYCLE_V2' "$input_system"
+grep -Fq 's_pendingOpenURLs' "$input_system"
+grep -Fq 'UIApplicationLaunchOptionsURLKey' "$input_system"
+grep -Fq 'applicationDidBecomeActive' "$input_system"
+grep -Fq 'UIApplicationStateActive' "$input_system"
+grep -Fq 'system->notifyExternalEventProcessed();' "$input_system"
+grep -Fq 'window->needsDisplayUpdate();' "$input_system"
+grep -Fq 'shouldReceiveTouch:(UITouch *)touch' "$input_window"
+grep -Fq 'rootWindow.windowLevel = UIWindowLevelNormal;' "$input_window"
+grep -Fq 'delegate.window = rootWindow;' "$input_window"
+if grep -Fq 'rootWindow.windowLevel = UIWindowLevelAlert;' "$input_window"; then
+  echo "The Blender content window would still run at alert level." >&2
+  exit 1
+fi
+grep -Fq '&config.executable, BKE_appdir_program_path()' "$python_interface"
 if grep -Fxq '    [url startAccessingSecurityScopedResource];' "$native_files"; then
   echo "The native Files delegate would leak an unbalanced security-scope access." >&2
   exit 1
@@ -243,6 +269,18 @@ grep -Fq "'ios': 'lib{}.fwork'.format(lib_name)" "$gltf_library"
 grep -Fq 'framework marker is not inside an app bundle' "$gltf_library"
 /usr/libexec/PlistBuddy -c 'Print :UIApplicationSupportsIndirectInputEvents' "$info_plist" | \
   grep -Fxq true
+/usr/libexec/PlistBuddy -c 'Print :UILaunchStoryboardName' "$info_plist" | grep -Fxq Main
+if /usr/libexec/PlistBuddy -c 'Print :UIMainStoryboardFile' "$info_plist" >/dev/null 2>&1; then
+  echo "Info.plist would still create a second storyboard-owned application window." >&2
+  exit 1
+fi
+if /usr/libexec/PlistBuddy -c 'Print :UISupportsDocumentBrowser' "$info_plist" >/dev/null 2>&1; then
+  echo "Info.plist would still falsely claim a UIDocumentBrowserViewController root." >&2
+  exit 1
+fi
+/usr/libexec/PlistBuddy -c 'Print :UIFileSharingEnabled' "$info_plist" | grep -Fxq true
+/usr/libexec/PlistBuddy -c 'Print :LSSupportsOpeningDocumentsInPlace' "$info_plist" | \
+  grep -Fxq true
 
 if /usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$info_plist" >/dev/null 2>&1; then
   /usr/libexec/PlistBuddy -c 'Set :CFBundleDisplayName Blender 5.2 iPad' "$info_plist"
@@ -266,5 +304,6 @@ Compatibility patch SHA-256: $(shasum -a 256 "$IOS_PATCH" | awk '{print $1}')
 Live-view geometry patch SHA-256: $(shasum -a 256 "$GEOMETRY_PATCH" | awk '{print $1}')
 Native Files patch SHA-256: $(shasum -a 256 "$NATIVE_FILES_PATCH" | awk '{print $1}')
 iOS runtime linkage patch SHA-256: $(shasum -a 256 "$RUNTIME_LINKAGE_PATCH" | awk '{print $1}')
+iOS Files lifecycle patch SHA-256: $(shasum -a 256 "$FILES_LIFECYCLE_PATCH" | awk '{print $1}')
 Codec framework transform SHA-256: $(shasum -a 256 "$CODEC_TRANSFORM" | awk '{print $1}')
 EOF
