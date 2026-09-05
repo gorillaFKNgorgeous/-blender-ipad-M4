@@ -98,6 +98,10 @@ if a provider does not restore scope via a subsequent Files-app launch.
 * Linux tests validate transformation contracts but cannot execute File Provider extensions or compile
   Objective-C++ against the iPadOS SDK. Do not merge until the corrected workflow is built and the
   complete device matrix above passes.
+* Run 79 exposed a build-validation false positive: counting every security-scope start and stop in the
+  complete generated file conflated independent runtime paths. The guard now isolates
+  `securityScopeDiagnostic`, requires exactly one start and one conditional stop inside that helper, and
+  retains the separate delegate leak check.
 * A future upstream bridge could log Blender's post-callback write return value directly. At present
   UIKit/GHOST log transaction and path delivery, while Blender's save operator owns and displays the
   authoritative write success/failure.

@@ -58,6 +58,8 @@ class NativeDocumentPickerTransformTests(unittest.TestCase):
         self.assertIn("source.count(open_initializer) == 1", self.prepare)
         self.assertIn("source.count(save_initializer) == 1", self.prepare)
         self.assertNotIn("grep -Fq 'asCopy:NO'", self.prepare)
+        self.assertIn("scope_helper = source[scope_helper_start:scope_helper_end]", self.prepare)
+        self.assertNotIn('source.count("startAccessingSecurityScopedResource")', self.prepare)
 
     def test_required_diagnostics_are_present(self):
         for diagnostic in (

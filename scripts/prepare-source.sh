@@ -223,9 +223,15 @@ assert "saveFilename = nil;" in source, \
     "The obsolete folder-save filename alert is still active for export"
 assert "controlled-import=yes final-path=%@" in source, \
     "Open could leave Blender working from UIKit's temporary Inbox"
-assert source.count("startAccessingSecurityScopedResource") == \
-       source.count("stopAccessingSecurityScopedResource"), \
-    "Security-scope access is not balanced"
+scope_helper_start = source.index("static NSString *securityScopeDiagnostic(NSURL *url)")
+scope_helper_end = source.index("#pragma mark - Security-Scoped URL Storage", scope_helper_start)
+scope_helper = source[scope_helper_start:scope_helper_end]
+assert scope_helper.count("startAccessingSecurityScopedResource") == 1, \
+    "Security-scope diagnostic must start access exactly once"
+assert scope_helper.count("stopAccessingSecurityScopedResource") == 1, \
+    "Security-scope diagnostic must stop access exactly once"
+assert "if (scopeStarted)" in scope_helper, \
+    "Security-scope diagnostic must only stop access after a successful start"
 PY
 grep -Fq 'delegate.ghostWindow = originWindow;' "$native_files"
 grep -Fq '[self deliverResultURL:url];' "$native_files"
