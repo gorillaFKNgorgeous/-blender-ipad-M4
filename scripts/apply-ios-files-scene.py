@@ -254,6 +254,9 @@ static NSString *securityScopeDiagnostic(NSURL *url)
     delegate.usesControlledImport = action == GHOST_kFileDialogOpen;
     if (!delegate.usesControlledImport) {
       delegate.saveExportURL = saveExportURL;
+      /* The export picker owns filename editing. Clearing this legacy folder-save value also
+       * bypasses the obsolete pre-picker filename alert and its directory-append semantics. */
+      saveFilename = nil;
     }
     picker.delegate = delegate;
 """,
@@ -283,14 +286,14 @@ static NSString *securityScopeDiagnostic(NSURL *url)
 
   if (_saveExportURL) {
     NSError *cleanupError = nil;
-    [[NSFileManager defaultManager]
+    BOOL cleanupSucceeded = [[NSFileManager defaultManager]
         removeItemAtURL:_saveExportURL.URLByDeletingLastPathComponent
                   error:&cleanupError];
-    if (cleanupError) {
-      NSString *cleanupMessage = [NSString
-          stringWithFormat:@"save export cleanup failed: %@", cleanupError];
-      GHOST_ios_logFileEvent((__bridge void *)cleanupMessage);
-    }
+    NSString *cleanupMessage = cleanupSucceeded ?
+                                   @"save export cleanup succeeded" :
+                                   [NSString stringWithFormat:@"save export cleanup failed: %@",
+                                                              cleanupError];
+    GHOST_ios_logFileEvent((__bridge void *)cleanupMessage);
   }
 """,
         "picker result diagnostics and export cleanup",

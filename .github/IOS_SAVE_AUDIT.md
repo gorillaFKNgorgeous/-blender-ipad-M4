@@ -26,12 +26,13 @@ The duplicated `Untitled.blend/Untitled.blend` was independent of the copy flag.
 delegate still had `defaultFilename` populated by its filename alert. It treated the export callback URL
 (`/.../Untitled.blend`) as the old directory selection and appended `Untitled.blend` again. Filename
 appending is now explicitly restricted to `UIDocumentPickerModeOpen`; an export/move result is already a
-complete document URL and is passed through unchanged.
+complete document URL and is passed through unchanged. The legacy pre-picker filename alert is bypassed
+for export transactions because Files owns filename editing.
 
 UIKit's export initializer requires an existing representation. GHOST creates an empty, uniquely scoped
 cache seed with the proposed filename. It is solely input to the Apple transaction, not the project or
-an Inbox working copy. Its private parent directory is cleaned after success or cancellation. The real
-project is written by Blender at the returned URL.
+an Inbox working copy. Its private parent directory is cleaned after success or cancellation, and both
+cleanup outcomes are logged. The real project is written by Blender at the returned URL.
 
 ### Open root cause and strategy
 

@@ -33,6 +33,7 @@ class NativeDocumentPickerTransformTests(unittest.TestCase):
             self.transform,
         )
         self.assertIn("save export picker presentation completed", self.transform)
+        self.assertIn("saveFilename = nil;", self.transform)
 
     def test_seed_and_import_paths_use_named_constants(self):
         for constant in (
@@ -73,6 +74,7 @@ class NativeDocumentPickerTransformTests(unittest.TestCase):
             "final-save-path=%@",
             "cancelled",
             "failed",
+            "cleanup succeeded",
             "cleanup failed",
         ):
             with self.subTest(diagnostic=diagnostic):

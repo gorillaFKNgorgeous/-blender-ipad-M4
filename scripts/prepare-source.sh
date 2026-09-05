@@ -219,6 +219,8 @@ assert "initForOpeningContentTypes:@[ UTTypeFolder ]" not in source, \
     "Save still uses an open/select folder picker"
 assert "controller.documentPickerMode == UIDocumentPickerModeOpen" in source, \
     "Export callbacks could append the filename twice"
+assert "saveFilename = nil;" in source, \
+    "The obsolete folder-save filename alert is still active for export"
 assert "controlled-import=yes final-path=%@" in source, \
     "Open could leave Blender working from UIKit's temporary Inbox"
 assert source.count("startAccessingSecurityScopedResource") == \
