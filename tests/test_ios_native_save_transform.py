@@ -7,45 +7,73 @@ TRANSFORM = ROOT / "scripts" / "apply-ios-files-scene.py"
 PREPARE = ROOT / "scripts" / "prepare-source.sh"
 
 
-class NativeSaveTransformTests(unittest.TestCase):
+class NativeDocumentPickerTransformTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.transform = TRANSFORM.read_text(encoding="utf-8")
         cls.prepare = PREPARE.read_text(encoding="utf-8")
 
-    def test_open_remains_in_place(self):
+    def test_open_uses_controlled_import(self):
         self.assertIn("initForOpeningContentTypes:contentTypes", self.transform)
-        self.assertIn("asCopy:NO", self.transform)
-        self.assertNotIn("native Files open picker copy mode", self.transform)
+        self.assertIn("asCopy:YES", self.transform)
+        self.assertIn("controlledImportURL", self.transform)
+        self.assertIn("Documents/Blender/Imports", self.transform)
+        self.assertIn("controlled-import=yes final-path=%@", self.transform)
 
-    def test_save_uses_export_not_folder_open(self):
+    def test_save_uses_writable_move_export(self):
         self.assertIn("initForExportingURLs:@[ saveExportURL ]", self.transform)
-        replacement = self.transform.split('"Apple-native save export picker"', 1)[0]
-        replacement = replacement.rsplit('""",\n        """', 1)[1]
-        self.assertNotIn("UTTypeFolder", replacement)
-        self.assertIn("asCopy:YES", replacement)
+        save_replacement = self.transform.split('"Apple-native save export picker"', 1)[0]
+        save_replacement = save_replacement.rsplit('""",\n        """', 1)[1]
+        self.assertNotIn("UTTypeFolder", save_replacement)
+        self.assertIn("asCopy:NO", save_replacement)
 
-    def test_export_seed_has_named_constants_and_cleanup(self):
-        self.assertIn("kBlenderSaveExportDirectory", self.transform)
-        self.assertIn("kBlenderFallbackSaveFilename", self.transform)
+    def test_export_callback_cannot_duplicate_filename(self):
+        self.assertIn(
+            "controller.documentPickerMode == UIDocumentPickerModeOpen",
+            self.transform,
+        )
+        self.assertIn("save export picker presentation completed", self.transform)
+
+    def test_seed_and_import_paths_use_named_constants(self):
+        for constant in (
+            "kBlenderSaveExportDirectory",
+            "kBlenderFallbackSaveFilename",
+            "kBlenderDocumentsDirectory",
+            "kBlenderImportsDirectory",
+        ):
+            with self.subTest(constant=constant):
+                self.assertIn(constant, self.transform)
         self.assertIn("removeItemAtURL:_saveExportURL.URLByDeletingLastPathComponent", self.transform)
 
-    def test_build_guard_rejects_regression(self):
-        self.assertIn("Save still uses an open/select folder picker.", self.prepare)
-        self.assertIn("initForExportingURLs:@[ saveExportURL ]", self.prepare)
+    def test_security_scope_probe_is_balanced(self):
+        generated = self.transform.split('"native save export helpers"', 1)[0]
+        generated = generated.rsplit('"""', 2)[1]
+        self.assertEqual(
+            generated.count("startAccessingSecurityScopedResource"),
+            generated.count("stopAccessingSecurityScopedResource"),
+        )
 
-    def test_required_save_diagnostics_are_present(self):
+    def test_build_guards_assert_each_initializer(self):
+        self.assertIn("source.count(open_initializer) == 1", self.prepare)
+        self.assertIn("source.count(save_initializer) == 1", self.prepare)
+        self.assertNotIn("grep -Fq 'asCopy:NO'", self.prepare)
+
+    def test_required_diagnostics_are_present(self):
         for diagnostic in (
+            "open picker requested",
+            "content-types=%@",
+            "open callback received",
+            "security-scope-start=%@",
+            "controlled-import=yes",
             "save picker requested",
-            "operation=Save As",
-            "picker=export",
+            "picker=move-export",
+            "seed=%@",
             "destination=%@",
             "security-scoped=%@",
-            "external-provider",
-            "callback delivered",
             "final-save-path=%@",
             "cancelled",
             "failed",
+            "cleanup failed",
         ):
             with self.subTest(diagnostic=diagnostic):
                 self.assertIn(diagnostic, self.transform)

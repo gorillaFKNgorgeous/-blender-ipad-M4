@@ -32,12 +32,25 @@ def main() -> int:
 
     picker = root / "intern/ghost/intern/GHOST_FilePickerIOS.mm"
 
-    # Opening must remain an in-place operation. In particular, do not turn provider documents into
-    # Inbox/container copies while repairing the independent save-dialog path.
-    require_once(
+    # Some Files providers never deliver the delegate callback for open-in-place. Request a UIKit
+    # import transaction, then immediately relocate its result out of the temporary Inbox. Direct
+    # Files-app scene opens continue to use their provider-issued in-place URL.
+    replace_once(
         picker,
-        "initForOpeningContentTypes:contentTypes\n                                                                           asCopy:NO",
-        "native Files open-in-place picker",
+        """picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:contentTypes
+                                                                           asCopy:NO];
+      picker.allowsMultipleSelection = NO;
+""",
+        """picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:contentTypes
+                                                                           asCopy:YES];
+      picker.allowsMultipleSelection = NO;
+      NSString *message = [NSString
+          stringWithFormat:@"open picker requested; picker=open; asCopy=YES; content-types=%@; "
+                            "fallback=Documents/Blender/Imports",
+                           contentTypes];
+      GHOST_ios_logFileEvent((__bridge void *)message);
+""",
+        "native Files controlled-import picker",
     )
 
     replace_once(
@@ -47,6 +60,8 @@ def main() -> int:
 
 static NSString *const kBlenderSaveExportDirectory = @"NativeSaveExports";
 static NSString *const kBlenderFallbackSaveFilename = @"Untitled.blend";
+static NSString *const kBlenderDocumentsDirectory = @"Blender";
+static NSString *const kBlenderImportsDirectory = @"Imports";
 
 static NSURL *createSaveExportURL(NSString *filename, NSError **error)
 {
@@ -81,6 +96,40 @@ static BOOL isURLInApplicationSandbox(NSURL *url)
          [urlPath hasPrefix:[homePath stringByAppendingString:@"/"]];
 }
 
+static NSURL *controlledImportURL(NSURL *selectedURL, NSError **error)
+{
+  NSFileManager *fileManager = [NSFileManager defaultManager];
+  NSURL *documentsURL = [[fileManager URLsForDirectory:NSDocumentDirectory
+                                              inDomains:NSUserDomainMask] firstObject];
+  NSURL *importsURL =
+      [[documentsURL URLByAppendingPathComponent:kBlenderDocumentsDirectory isDirectory:YES]
+          URLByAppendingPathComponent:kBlenderImportsDirectory isDirectory:YES];
+  if (![fileManager createDirectoryAtURL:importsURL
+             withIntermediateDirectories:YES
+                              attributes:nil
+                                   error:error])
+  {
+    return nil;
+  }
+
+  NSString *filename = selectedURL.lastPathComponent;
+  NSURL *destinationURL = [importsURL URLByAppendingPathComponent:filename isDirectory:NO];
+  if ([fileManager fileExistsAtPath:destinationURL.path]) {
+    NSString *extension = filename.pathExtension;
+    NSString *stem = filename.stringByDeletingPathExtension;
+    NSString *uniqueStem = [NSString stringWithFormat:@"%@-%@", stem, NSUUID.UUID.UUIDString];
+    NSString *uniqueFilename = extension.length > 0 ?
+                                   [uniqueStem stringByAppendingPathExtension:extension] :
+                                   uniqueStem;
+    destinationURL = [importsURL URLByAppendingPathComponent:uniqueFilename isDirectory:NO];
+  }
+
+  if (![fileManager copyItemAtURL:selectedURL toURL:destinationURL error:error]) {
+    return nil;
+  }
+  return destinationURL;
+}
+
 static NSString *securityScopeDiagnostic(NSURL *url)
 {
   if (isURLInApplicationSandbox(url)) {
@@ -104,8 +153,57 @@ static NSString *securityScopeDiagnostic(NSURL *url)
         """@property(nonatomic, copy) NSString *defaultFilename;
 /** Temporary representation required by UIKit's export picker. */
 @property(nonatomic, retain) NSURL *saveExportURL;
+/** Open picker copy results must be relocated from UIKit's temporary Inbox. */
+@property(nonatomic, assign) BOOL usesControlledImport;
 """,
         "save export delegate state",
+    )
+
+    replace_once(
+        picker,
+        """    NSURL *url = urls.firstObject;
+
+    /* Preserve the original security-scoped directory URL before appending the save name.
+""",
+        """    NSURL *url = urls.firstObject;
+
+    if (_usesControlledImport) {
+      NSURL *returnedURL = url;
+      NSError *importError = nil;
+      url = controlledImportURL(returnedURL, &importError);
+      if (!url) {
+        NSString *message = [NSString
+            stringWithFormat:@"open controlled import failed; returned=%@ error=%@",
+                             returnedURL.path,
+                             importError];
+        GHOST_ios_logFileEvent((__bridge void *)message);
+        [self deliverResultURL:nil];
+        return;
+      }
+      NSString *message = [NSString
+          stringWithFormat:@"open callback received; asCopy=YES returned=%@ location=%@ "
+                            "security-scope-start=%@ controlled-import=yes final-path=%@",
+                           returnedURL.path,
+                           isURLInApplicationSandbox(returnedURL) ? @"app-sandbox-or-Inbox" :
+                                                                    @"external-provider",
+                           securityScopeDiagnostic(returnedURL),
+                           url.path];
+      GHOST_ios_logFileEvent((__bridge void *)message);
+    }
+
+    /* Preserve the original security-scoped directory URL before appending the save name.
+""",
+        "controlled open import callback",
+    )
+
+    replace_once(
+        picker,
+        "    if (_defaultFilename.length > 0) {\n",
+        """    if (controller.documentPickerMode == UIDocumentPickerModeOpen &&
+        _defaultFilename.length > 0)
+    {
+""",
+        "prevent export filename duplication",
     )
 
     replace_once(
@@ -137,10 +235,10 @@ static NSString *securityScopeDiagnostic(NSURL *url)
        * document representation; Files owns destination selection, naming, and replacement UI.
        * Blender overwrites the provider-returned URL after the callback. */
       picker = [[UIDocumentPickerViewController alloc] initForExportingURLs:@[ saveExportURL ]
-                                                                     asCopy:YES];
+                                                                     asCopy:NO];
       picker.allowsMultipleSelection = NO;
       NSString *message = [NSString
-          stringWithFormat:@"save picker requested; operation=Save As; picker=export; source=%@",
+          stringWithFormat:@"save picker requested; operation=Save As; picker=move-export; asCopy=NO; seed=%@",
                            saveExportURL.path];
       GHOST_ios_logFileEvent((__bridge void *)message);
 """,
@@ -153,7 +251,8 @@ static NSString *securityScopeDiagnostic(NSURL *url)
     picker.delegate = delegate;
 """,
         """    delegate.defaultFilename = nil;
-    if (action != GHOST_kFileDialogOpen) {
+    delegate.usesControlledImport = action == GHOST_kFileDialogOpen;
+    if (!delegate.usesControlledImport) {
       delegate.saveExportURL = saveExportURL;
     }
     picker.delegate = delegate;
@@ -195,6 +294,13 @@ static NSString *securityScopeDiagnostic(NSURL *url)
   }
 """,
         "picker result diagnostics and export cleanup",
+    )
+
+    replace_once(
+        picker,
+        '@"folder picker presentation completed"',
+        '@"save export picker presentation completed"',
+        "save export presentation diagnostic",
     )
 
     system = root / "intern/ghost/intern/GHOST_SystemIOS.mm"
@@ -447,8 +553,16 @@ static void blender_ios_queueOpenURL(NSURL *url, NSString *source)
         "Info.plist UIWindowScene manifest",
     )
 
-    require_once(picker, "asCopy:YES", "copy-mode open picker")
-    require_once(picker, "asCopy:NO", "in-place save-folder picker")
+    require_once(
+        picker,
+        "initForOpeningContentTypes:contentTypes\n                                                                           asCopy:YES",
+        "controlled-import Open picker",
+    )
+    require_once(
+        picker,
+        "initForExportingURLs:@[ saveExportURL ]\n                                                                     asCopy:NO",
+        "writable move/export Save As picker",
+    )
     require_once(system, "FILES_SCENE_V3", "scene lifecycle marker")
     require_once(system, "@interface IOSSceneDelegate : UIResponder <UIWindowSceneDelegate>",
                  "scene delegate declaration")
