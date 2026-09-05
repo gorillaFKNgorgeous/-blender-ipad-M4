@@ -31,21 +31,170 @@ def main() -> int:
         raise RuntimeError(f"Blender source directory does not exist: {root}")
 
     picker = root / "intern/ghost/intern/GHOST_FilePickerIOS.mm"
+
+    # Opening must remain an in-place operation. In particular, do not turn provider documents into
+    # Inbox/container copies while repairing the independent save-dialog path.
+    require_once(
+        picker,
+        "initForOpeningContentTypes:contentTypes\n                                                                           asCopy:NO",
+        "native Files open-in-place picker",
+    )
+
     replace_once(
         picker,
-        """      /* Open in place. Copy-mode leaves the picker on screen while a provider copies a large
-       * .blend file into the app container, which looks like the tap was ignored. Blender already
-       * brackets its reads with security-scoped access, so in-place URLs are the correct model. */
-      picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:contentTypes
-                                                                           asCopy:NO];
+        "#pragma mark - Security-Scoped URL Storage\n",
+        """#pragma mark - Native Save Export
+
+static NSString *const kBlenderSaveExportDirectory = @"NativeSaveExports";
+static NSString *const kBlenderFallbackSaveFilename = @"Untitled.blend";
+
+static NSURL *createSaveExportURL(NSString *filename, NSError **error)
+{
+  NSFileManager *fileManager = [NSFileManager defaultManager];
+  NSURL *cachesURL = [[fileManager URLsForDirectory:NSCachesDirectory
+                                          inDomains:NSUserDomainMask] firstObject];
+  NSURL *exportDirectory =
+      [[cachesURL URLByAppendingPathComponent:kBlenderSaveExportDirectory isDirectory:YES]
+          URLByAppendingPathComponent:NSUUID.UUID.UUIDString isDirectory:YES];
+  if (![fileManager createDirectoryAtURL:exportDirectory
+             withIntermediateDirectories:YES
+                              attributes:nil
+                                   error:error])
+  {
+    return nil;
+  }
+
+  NSString *exportFilename = filename.length > 0 ? filename : kBlenderFallbackSaveFilename;
+  NSURL *exportURL = [exportDirectory URLByAppendingPathComponent:exportFilename isDirectory:NO];
+  if (![[NSData data] writeToURL:exportURL options:NSDataWritingAtomic error:error]) {
+    [fileManager removeItemAtURL:exportDirectory error:nil];
+    return nil;
+  }
+  return exportURL;
+}
+
+static BOOL isURLInApplicationSandbox(NSURL *url)
+{
+  NSString *homePath = NSHomeDirectory().stringByStandardizingPath;
+  NSString *urlPath = url.path.stringByStandardizingPath;
+  return [urlPath isEqualToString:homePath] ||
+         [urlPath hasPrefix:[homePath stringByAppendingString:@"/"]];
+}
+
+static NSString *securityScopeDiagnostic(NSURL *url)
+{
+  if (isURLInApplicationSandbox(url)) {
+    return @"not-required";
+  }
+  BOOL scopeStarted = [url startAccessingSecurityScopedResource];
+  if (scopeStarted) {
+    [url stopAccessingSecurityScopedResource];
+  }
+  return scopeStarted ? @"granted" : @"denied";
+}
+
+#pragma mark - Security-Scoped URL Storage
 """,
-        """      /* Import a sandbox-readable copy. Build 73's open-in-place path presented correctly on
-       * device but never produced a selection callback. Copy mode uses UIKit's provider transaction
-       * and returns a local URL that Blender can read without relying on provider open-in-place state. */
-      picker = [[UIDocumentPickerViewController alloc] initForOpeningContentTypes:contentTypes
-                                                                           asCopy:YES];
+        "native save export helpers",
+    )
+
+    replace_once(
+        picker,
+        "@property(nonatomic, copy) NSString *defaultFilename;\n",
+        """@property(nonatomic, copy) NSString *defaultFilename;
+/** Temporary representation required by UIKit's export picker. */
+@property(nonatomic, retain) NSURL *saveExportURL;
 """,
-        "native Files open picker copy mode",
+        "save export delegate state",
+    )
+
+    replace_once(
+        picker,
+        "    NSString *saveFilename = nil;\n",
+        """    NSString *saveFilename = nil;
+    NSURL *saveExportURL = nil;
+""",
+        "save export URL local",
+    )
+
+    replace_once(
+        picker,
+        """      picker = [[UIDocumentPickerViewController alloc]
+          initForOpeningContentTypes:@[ UTTypeFolder ]
+                               asCopy:NO];
+      picker.allowsMultipleSelection = NO;
+""",
+        """      NSError *exportError = nil;
+      saveExportURL = createSaveExportURL(saveFilename, &exportError);
+      if (!saveExportURL) {
+        NSString *message = [NSString
+            stringWithFormat:@"save picker failed to create export representation: %@", exportError];
+        GHOST_ios_logFileEvent((__bridge void *)message);
+        return GHOST_kFailure;
+      }
+
+      /* UIKit has no desktop-style choose-a-path API. Its supported save workflow exports a
+       * document representation; Files owns destination selection, naming, and replacement UI.
+       * Blender overwrites the provider-returned URL after the callback. */
+      picker = [[UIDocumentPickerViewController alloc] initForExportingURLs:@[ saveExportURL ]
+                                                                     asCopy:YES];
+      picker.allowsMultipleSelection = NO;
+      NSString *message = [NSString
+          stringWithFormat:@"save picker requested; operation=Save As; picker=export; source=%@",
+                           saveExportURL.path];
+      GHOST_ios_logFileEvent((__bridge void *)message);
+""",
+        "Apple-native save export picker",
+    )
+
+    replace_once(
+        picker,
+        """    delegate.defaultFilename = saveFilename;
+    picker.delegate = delegate;
+""",
+        """    delegate.defaultFilename = nil;
+    if (action != GHOST_kFileDialogOpen) {
+      delegate.saveExportURL = saveExportURL;
+    }
+    picker.delegate = delegate;
+""",
+        "save export delegate configuration",
+    )
+
+    replace_once(
+        picker,
+        """  NSString *result = [NSString
+      stringWithFormat:@"picker delivered result: %@", url ? url.path : @"cancel"];
+  GHOST_ios_logFileEvent((__bridge void *)result);
+""",
+        """  NSString *result = nil;
+  if (url) {
+    result = [NSString
+        stringWithFormat:@"picker callback delivered; destination=%@ security-scoped=%@ "
+                          "location=%@ final-save-path=%@",
+                         url.path,
+                         securityScopeDiagnostic(url),
+                         isURLInApplicationSandbox(url) ? @"app-sandbox" : @"external-provider",
+                         url.path];
+  }
+  else {
+    result = @"save/open picker cancelled; callback delivered; project filepath unchanged";
+  }
+  GHOST_ios_logFileEvent((__bridge void *)result);
+
+  if (_saveExportURL) {
+    NSError *cleanupError = nil;
+    [[NSFileManager defaultManager]
+        removeItemAtURL:_saveExportURL.URLByDeletingLastPathComponent
+                  error:&cleanupError];
+    if (cleanupError) {
+      NSString *cleanupMessage = [NSString
+          stringWithFormat:@"save export cleanup failed: %@", cleanupError];
+      GHOST_ios_logFileEvent((__bridge void *)cleanupMessage);
+    }
+  }
+""",
+        "picker result diagnostics and export cleanup",
     )
 
     system = root / "intern/ghost/intern/GHOST_SystemIOS.mm"

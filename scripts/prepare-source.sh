@@ -206,6 +206,12 @@ grep -Fq 'm_metalView.frame = rootWindow.bounds;' "$input_window"
 grep -Fq 'return m_metalView.bounds.size;' "$input_window"
 grep -Fq 'initForOpeningContentTypes:contentTypes' "$native_files"
 grep -Fq 'asCopy:NO' "$native_files"
+grep -Fq 'initForExportingURLs:@[ saveExportURL ]' "$native_files"
+grep -Fq 'save picker requested; operation=Save As; picker=export' "$native_files"
+if grep -Fq 'initForOpeningContentTypes:@[ UTTypeFolder ]' "$native_files"; then
+  echo "Save still uses an open/select folder picker." >&2
+  exit 1
+fi
 grep -Fq 'delegate.ghostWindow = originWindow;' "$native_files"
 grep -Fq '[self deliverResultURL:url];' "$native_files"
 grep -Fq 'window->needsDisplayUpdate();' "$native_files"
