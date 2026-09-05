@@ -204,8 +204,35 @@ grep -Fq '_view.drawableSize = expectedDrawableSize;' "$input_window"
 grep -Fq '[m_uiview_controller loadViewIfNeeded];' "$input_window"
 grep -Fq 'm_metalView.frame = rootWindow.bounds;' "$input_window"
 grep -Fq 'return m_metalView.bounds.size;' "$input_window"
-grep -Fq 'initForOpeningContentTypes:contentTypes' "$native_files"
-grep -Fq 'asCopy:NO' "$native_files"
+python3 - "$native_files" <<'PY'
+from pathlib import Path
+import sys
+
+source = Path(sys.argv[1]).read_text(encoding="utf-8")
+open_initializer = """initForOpeningContentTypes:contentTypes
+                                                                           asCopy:YES"""
+save_initializer = """initForExportingURLs:@[ saveExportURL ]
+                                                                     asCopy:NO"""
+assert source.count(open_initializer) == 1, "Open must use the controlled UIKit import mode"
+assert source.count(save_initializer) == 1, "Save As must use the writable move/export mode"
+assert "initForOpeningContentTypes:@[ UTTypeFolder ]" not in source, \
+    "Save still uses an open/select folder picker"
+assert "controller.documentPickerMode == UIDocumentPickerModeOpen" in source, \
+    "Export callbacks could append the filename twice"
+assert "saveFilename = nil;" in source, \
+    "The obsolete folder-save filename alert is still active for export"
+assert "controlled-import=yes final-path=%@" in source, \
+    "Open could leave Blender working from UIKit's temporary Inbox"
+scope_helper_start = source.index("static NSString *securityScopeDiagnostic(NSURL *url)")
+scope_helper_end = source.index("#pragma mark - Security-Scoped URL Storage", scope_helper_start)
+scope_helper = source[scope_helper_start:scope_helper_end]
+assert scope_helper.count("startAccessingSecurityScopedResource") == 1, \
+    "Security-scope diagnostic must start access exactly once"
+assert scope_helper.count("stopAccessingSecurityScopedResource") == 1, \
+    "Security-scope diagnostic must stop access exactly once"
+assert "if (scopeStarted)" in scope_helper, \
+    "Security-scope diagnostic must only stop access after a successful start"
+PY
 grep -Fq 'delegate.ghostWindow = originWindow;' "$native_files"
 grep -Fq '[self deliverResultURL:url];' "$native_files"
 grep -Fq 'window->needsDisplayUpdate();' "$native_files"
