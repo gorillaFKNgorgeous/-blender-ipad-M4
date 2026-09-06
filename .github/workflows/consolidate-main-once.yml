@@ -49,7 +49,7 @@ jobs:
 
           def get(path):
               request = urllib.request.Request(
-                  "https://api.github.com/repos/" + repo + "/" + path,
+                  "https://api.github.com/repos/" + repo + ("/" + path if path else ""),
                   headers={
                       "Accept": "application/vnd.github+json",
                       "Authorization": "Bearer " + token,
