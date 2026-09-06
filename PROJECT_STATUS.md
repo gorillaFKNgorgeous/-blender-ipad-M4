@@ -1,39 +1,38 @@
 # Blender iPad project status
 
-Last audited: **6 September 2026**. The [README](README.md) contains the current project overview, evidence, build instructions, and Siri/agent roadmap. This note replaces the 28 August snapshot that predated the 5.2 work. It records project state; it does not make an untested device feature verified.
+Updated: **6 September 2026**, following the owner's confirmation and repository consolidation.
 
-## Current baseline and branches
+## Working baseline
 
-- The active build branch is [`upgrade/ios-5.2-m4-full`](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/tree/upgrade/ios-5.2-m4-full). Blender 5.2 has been built repeatedly, installed, and reported running on the project's iPad Pro M4. Earlier reports include corrected display/touch alignment and working scene loading/file insertion.
-- The target device is the 1 TB / 16 GB M4 iPad Pro running iPadOS 27; deployment minimum is iPadOS 26.0.
-- `main` still contains the historical 5.0 harness. Updating its documentation does not merge or promote the 5.2 build code. Select the 5.2 branch when starting a current build.
-- `upgrade/ios-5.1.2` preserves the earlier running baseline. `fix/ios-desktop-input` and its open PR #1 belong to that older development line; do not apply that patch wholesale over the newer 5.2 iOS input implementation.
-- The normal installation workflow remains GitHub Actions → IPA → Signulous → iPad. A local Mac is not a prerequisite for that workflow.
+**Build #81 is the current installed, working Blender 5.2 build.** The owner confirms saving and file functions work in normal use. It has not been exhaustively tested across every provider and edge case. Do not describe its normal saving/file behavior as unconfirmed or broken.
 
-## Latest verified build evidence
+- Target device: 1 TB / 16 GB iPad Pro M4 running iPadOS 27; deployment minimum iPadOS 26.0.
+- [Build #81](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/actions/runs/34008472726) completed successfully at 04:10 UTC on 6 September 2026.
+- Exact build harness revision: `c9b9d486b390333e396ba882b33d9a2b6ae591e1`.
+- Blender source pin: `2bc556e58e82eb3a801895f2cb1881c0267e5cd5`.
+- Run #81 diagnostics record all 20 required feature flags enabled, 45 packaged Mach-O binaries, Python/NumPy/Zstandard frameworks, and both glTF codec bridge frameworks. All eight recorded patch hashes matched the audited checkout.
+- Installation remains GitHub Actions → IPA → Signulous → iPad.
 
-[Run #81](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/actions/runs/34008472726) passed on 6 September 2026, completing at 04:10 UTC. It built harness commit `c9b9d486b390333e396ba882b33d9a2b6ae591e1`, after [PR #4](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/pull/4) merged the native Open/Save changes.
+## Repository policy
 
-Blender source remains pinned at `2bc556e58e82eb3a801895f2cb1881c0267e5cd5`. Run #81's downloaded diagnostics confirm the source revision, all 20 required feature flags enabled, and a bundle with 45 Mach-O binaries including Python, NumPy, Zstandard, and both glTF codec bridge frameworks. The eight patch hashes match the audited checkout. The supplied 5 September manifests are earlier evidence, with harness commit `ecf4b8882de25edc3c7b9b03e5d9df278cb67efd`.
+**`main` is the sole development branch and contains build #81's application implementation.** Work directly on `main`. Do not create additional branches or pull requests unless the owner explicitly changes this instruction. Old version branches are being removed, and obsolete PRs are closed.
 
-The seven existing Files source-text regression checks passed during the audit. They do not run UIKit or File Provider extensions. Compilation and packaging do not establish signed-device acceptance.
+PR #5 transferred 72 accumulated 5.2 commits into the older `main`. Its head differed from build #81 only in README.md. The merge was verified to preserve every file from build #81 apart from project documentation. The workflow trigger is now `main` plus manual dispatch; its build job, pins, patches, and packaging implementation are unchanged.
 
-## Open runtime work
+The obsolete MCP PR #3 and older input PR #1 are closed. The old MCP implementation is rejected: do not merge, restore, or port it as the basis for future agent work. Future Siri and agent integration must be implemented against the current working 5.2 runtime.
 
-The currently installed build number and build #81's device results have not been confirmed in this audit. Keep these items open:
+Closed/merged PR records and Git commit history describe past work; they are not alternate maintained versions or pending work.
 
-- Save As, subsequent Save, cancellation, replacement, and save/reopen across supported providers.
-- Repeated folder/path nesting. PR #4 fixes the specific duplicate-filename export callback; the broader report needs retesting.
-- Cold/warm Files launches, controlled picker imports, and stable project-relative paths.
-- Unexpected app closures, memory/render measurements, and recovery. Memory pressure/rendering are hypotheses for the ongoing closures, not established causes.
-- Representative rendering, imports/exports, Python modules, audio/video, input, and lifecycle tests.
+## Follow-up validation
 
-Use `Documents/BlenderFiles.log` for file handoffs. Collect exact run number, IPA/signing route, reproduction steps, and termination diagnostics with device reports. Optimize against the actual installed memory allowance; the full-memory IPA name or physical 16 GB does not establish that allowance.
+The normal save/file workflow is accepted as working. Broader provider, cancellation/replacement, repeated-operation, cold/warm launch, rendering, and lifecycle coverage remain useful regression work. Earlier builds had unexpected closures; their cause was not established, and a continuing failure in build #81 is not confirmed by the owner's latest report.
 
-## Siri and agent direction
+Use `Documents/BlenderFiles.log` for file handoffs. Collect exact build/signing route and reproduction steps with any new failure. Establish memory/render telemetry and recovery behavior using the installed process's actual memory allowance. The full-memory IPA name or the iPad's physical 16 GB does not establish that allowance.
 
-The user's vision is deep, actionable Siri integration; a capable native assistant that can work on-device without internet; and the ability to authorize an agent of the user's choosing. The README proposes a common versioned Blender action layer shared by App Intents/Shortcuts, on-device Foundation Models tools, and MCP/other client adapters. None of the Siri/Foundation Models work is implemented in the audited 5.2 harness.
+The seven existing Files checks passed during the audit. They inspect transformation source text and do not exercise UIKit or File Provider extensions.
 
-[PR #3](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/pull/3), branch `feature/ipad-mcp-bridge` at `5eb6ea1d30b68f27aed3c909dcf40eaffde58898`, contains the first MCP relay and Blender startup bridge. It targets `fix/ios-desktop-input`, remains unmerged, and is not in build #81. Deployment, connection setup, and physical iPad validation are listed as outstanding; this audit did not verify a live service.
+## Product direction
 
-Next priorities are stable documents/recovery and measured runtime behavior, the shared action layer, offline assistant implementation, Siri integration, and wider agent/creative-operation coverage. Preserve broad Blender capability while addressing documented platform blockers. Separate implemented code, CI evidence, device observations, and future goals whenever updating this note.
+Deep, actionable Siri integration; a capable native assistant that can work on-device without internet; and the ability for users to authorize an agent of their choosing remain the goals. The [README](README.md) describes a new shared Blender action layer for App Intents/Shortcuts, on-device Foundation Models tools, and compatible external-agent adapters such as MCP.
+
+These integrations are planned, not features of build #81. Build them on `main` against the current runtime and document handling, with broad operation coverage, real scene context, results, undo/checkpoints, and user-controlled access.

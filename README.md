@@ -4,25 +4,26 @@ GhostBlender brings Blender to iPad as a native application, with the ambition o
 
 This repository contains the workflows, dependency bootstrap, packaging scripts, and compatibility changes used to build a pinned Blender iOS source tree. The current target is **Blender 5.2 on a 1 TB iPad Pro M4 with 16 GB RAM**, running iPadOS 27. The deployment minimum is iPadOS 26.0. This remains an experimental community port.
 
-**Last audited: 6 September 2026.** Native Blender is running on the project device. Siri and the offline assistant are planned; an external-agent bridge exists on a separate, unmerged branch.
+**Current working baseline: build #81, confirmed by the owner on 6 September 2026.** Saving and file functions work in normal use; exhaustive edge-case testing remains follow-up work. **`main` is the sole development branch** and contains this implementation. Siri, the offline assistant, and agent access are future development on this baseline.
 
 ## Current project state
 
-| Area | Verified state at this audit |
+| Area | Current state |
 |---|---|
-| Active development | [`upgrade/ios-5.2-m4-full`](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/tree/upgrade/ios-5.2-m4-full) |
-| Latest successful 5.2 build | [Actions run #81](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/actions/runs/34008472726), completed 6 September 2026 at 04:10 UTC |
-| Build harness revision | [`c9b9d486b390`](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/commit/c9b9d486b390333e396ba882b33d9a2b6ae591e1), including merged [PR #4: native Open/Save fixes](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/pull/4) |
-| Device observations | Earlier 5.2 builds launched with corrected display/touch alignment; scene loading and file insertion were reported working. These observations do not establish acceptance of every operation in build #81. |
-| Remaining validation | Save/reopen across Files providers, repeated folder/path nesting, cold/warm document launches, sustained rendering, and unexpected app termination/recovery |
-| Default branch | `main` still contains the original 5.0 build harness. Its README is a project overview; select the 5.2 branch to build the current application. |
-| Earlier baseline | [`upgrade/ios-5.1.2`](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/tree/upgrade/ios-5.1.2) preserves the previously running 5.1.2 build work. |
-| External-agent prototype | [PR #3](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/pull/3), `feature/ipad-mcp-bridge`, targets the older `fix/ios-desktop-input` branch. It is absent from build #81. |
-| Siri / on-device language model | No App Intents or Foundation Models integration is present in the audited 5.2 harness. |
+| Development branch | [`main`](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/tree/main), the only maintained branch |
+| Working iPad build | [Actions run #81](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/actions/runs/34008472726), completed 6 September 2026 at 04:10 UTC |
+| Build #81 revision | [`c9b9d486b390`](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/commit/c9b9d486b390333e396ba882b33d9a2b6ae591e1), including the native Open/Save fixes |
+| Device confirmation | The owner reports build #81 is installed and working, including saving and file functions. Earlier display/touch alignment fixes and scene loading are retained. |
+| Follow-up coverage | Provider and cancellation/replacement edge cases, cold/warm launches, sustained rendering, memory behavior, and recovery |
+| Main-branch promotion | PR #5 merged the accumulated 5.2 work into `main`. It contained build #81's implementation plus README updates. Subsequent consolidation changes concern documentation and workflow triggers. |
+| Older work | Obsolete input and MCP PRs are closed. Old version branches are being removed; further work belongs directly on `main`. |
+| Siri / assistant / agents | Planned. The obsolete MCP prototype has been rejected and is not part of this baseline. |
+
+PR #5 was large because it moved 72 accumulated commits into the old default branch. **Build #81 was built before that promotion, from `c9b9d48`; the PR did not introduce a different application implementation.** Its head differed from build #81 only in the README. The promotion was checked to preserve every non-documentation file, and the build job remains unchanged apart from its main-only trigger.
 
 The supplied 5 September manifests record harness revision `ecf4b8882de2`. This audit also retrieved **run #81's own diagnostics**: its source manifest records `c9b9d486b390`, its feature flags match the supplied manifest, and its bundle manifest records **45 Mach-O binaries**, including `Python.framework`, native NumPy and Zstandard modules, and both glTF codec bridge frameworks. All eight recorded patch hashes match the audited checkout. Keep the harness revision as well as patch hashes: the harness also contains source-transform scripts.
 
-A successful workflow establishes compilation and passage of the configured packaging checks. Feature flags and framework presence do not establish runtime correctness on the signed iPad application.
+Build #81 has both successful CI evidence and owner-confirmed normal save/file operation. Feature flags and framework presence alone do not establish correctness for every enabled subsystem or edge case.
 
 ## Feature coverage
 
@@ -51,13 +52,13 @@ The extension manager is retained, but compatibility must be established per ext
 | **Save As**, or first Save | Uses UIKit's move/export picker with a temporary cache seed. Blender then writes the real project to the returned document path. The seed is not a saved `.blend` project. |
 | **Save** after a path is established | Blender writes the current project path without requesting another picker, subject to actual write access. |
 
-PR #4 addresses a specific duplicated-path cause: the old folder-save callback appended a filename to an export result that already contained it, producing paths such as `Untitled.blend/Untitled.blend`. The corrected path handling and provider write access need confirmation on build #81. The broader repeated-nesting report should remain open until reproduced and retested.
+PR #4 addresses a specific duplicated-path cause: the old folder-save callback appended a filename to an export result that already contained it, producing paths such as `Untitled.blend/Untitled.blend`. The owner now confirms saving and file functions work on build #81. Keep provider-specific and repeated-operation cases in the regression matrix; exhaustive edge-case coverage is not claimed.
 
-The patches retain provider security-scoped URLs, route picker results to the originating Blender window, use a normal-level application window, and suspend Blender gestures behind native modal UI. Picker/handoff diagnostics go to **`Documents/BlenderFiles.log`**. The [native Open/Save audit](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/blob/upgrade/ios-5.2-m4-full/.github/IOS_SAVE_AUDIT.md) contains the detailed implementation and provider test matrix; its earlier merge-gate wording is historical, since PR #4 has now merged.
+The patches retain provider security-scoped URLs, route picker results to the originating Blender window, use a normal-level application window, and suspend Blender gestures behind native modal UI. Picker/handoff diagnostics go to **`Documents/BlenderFiles.log`**. The [native Open/Save audit](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/blob/main/.github/IOS_SAVE_AUDIT.md) contains the implementation history, current device acceptance, and follow-up provider test matrix.
 
-**Unexpected closures remain unresolved.** Memory pressure and rendering are investigation candidates; no reviewed termination report establishes the cause of the ongoing closures. Comprehensive memory/render telemetry and a validated recovery workflow remain priorities.
+**Long-run stability and recovery need broader validation.** Earlier builds had unexpected closures whose cause was not established. Memory pressure and rendering remain investigation candidates if failures recur; this audit does not establish a continuing failure in build #81. Comprehensive memory/render telemetry and recovery checks remain priorities.
 
-Before treating a build as a daily-use baseline, record its run number and signing route, then verify:
+Build #81 is the current working baseline. For broader regression coverage and future builds, record the run number and signing route, then verify:
 
 1. Launch, touch alignment, keyboard/mouse/Pencil input, and viewport interaction.
 2. Save As to one regular `.blend` file; modify and Save; close and reopen it. Repeat across On My iPad, iCloud Drive, and supported providers, including cancellation and denied/offline access.
@@ -95,7 +96,7 @@ Artifacts are retained for **21 days**. Their run pages remain useful records af
 
 The normal workflow is **GitHub Actions → IPA → Signulous → physical iPad testing**. No local Mac is required to use it.
 
-In [GitHub Actions](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/actions/workflows/build-unsigned-ipa.yml), choose **Run workflow** and select **`upgrade/ios-5.2-m4-full`**. That branch's workflow is named **Build full Blender 5.2 iPad M4 IPA**. The default branch still has the historical workflow, so branch selection matters.
+In [GitHub Actions](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/actions/workflows/build-unsigned-ipa.yml), choose **Build full Blender 5.2 iPad M4 IPA → Run workflow → `main`**. Relevant pushes to `main` also trigger the build. Development stays on `main`; do not create additional branches or pull requests unless the owner explicitly changes this instruction.
 
 | Build input | Pin / requirement |
 |---|---|
@@ -106,7 +107,7 @@ In [GitHub Actions](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/actio
 | Target | `arm64` / `iphoneos`, deployment target **26.0** |
 | Application ID | `com.gorillafkngorgeous.blenderipad52` |
 
-The [workflow](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/blob/upgrade/ios-5.2-m4-full/.github/workflows/build-unsigned-ipa.yml) is the authoritative recipe. It prepares source and libraries, restores or builds iOS dependencies, configures Blender, builds the **`blender` scheme** so its app-bundling phase runs, verifies linkage, and packages both IPAs. Source preparation alone is not a complete local build recipe. Local reproduction requires an Apple-silicon Mac and the full bootstrap/configuration steps.
+The [workflow](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/blob/main/.github/workflows/build-unsigned-ipa.yml) is the authoritative recipe. It prepares source and libraries, restores or builds iOS dependencies, configures Blender, builds the **`blender` scheme** so its app-bundling phase runs, verifies linkage, and packages both IPAs. Source preparation alone is not a complete local build recipe. Local reproduction requires an Apple-silicon Mac and the full bootstrap/configuration steps.
 
 The bootstrap replaces the original bundle's Python 3.11 with matching host/target CPython 3.13.13. It uses iOS compiler wrappers and explicit target dependency paths to prevent macOS library contamination. Native Python modules use iOS frameworks and `.fwork`/`.origin` records; the glTF bridge frameworks contain their statically linked codec dependencies.
 
@@ -143,40 +144,38 @@ Blender should supply exact scene data and execute operations. The model interpr
 | Rendering and delivery | Configure EEVEE/Cycles, frame cameras, start/cancel jobs, inspect outputs, import/export, and save through the document layer. |
 | Project assistance | Explain controls, identify missing assets, report measured resource use, keep checkpoints, and undo supported edits. |
 
-Build the catalog from Blender's Python/RNA/operator interfaces where practical, with context requirements and capability checks. Expand systematic coverage beyond the prototype's initial tools. Versioned requests/results should carry object identifiers, validated parameters, actual results/errors, and job state. Run Blender data access and mutations on its main thread through a controlled bridge from Swift or the network layer. Start with foreground operation, bounded queues, and explicit unavailable/disconnected results when Blender cannot service work. Undo, checkpoints, cancellation, and post-action inspection support longer sequences; irreversible file operations need their own handling.
+Build the catalog from Blender's Python/RNA/operator interfaces where practical, with context requirements and capability checks. Implement broad, systematic coverage against the current 5.2 runtime. Versioned requests/results should carry object identifiers, validated parameters, actual results/errors, and job state. Run Blender data access and mutations on its main thread through a controlled bridge from Swift or the network layer. Start with foreground operation, bounded queues, and explicit unavailable/disconnected results when Blender cannot service work. Undo, checkpoints, cancellation, and post-action inspection support longer sequences; irreversible file operations need their own handling.
 
 Users should be able to choose and disconnect agents, scope scene/file access, decide what leaves the device, and see what changed. Local assistance must remain independent of an external provider account. A cloud fallback should be an explicit choice.
 
-### Existing MCP prototype
+### Agent implementation policy
 
-[PR #3](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/pull/3) contains a Node MCP service, a Blender Python startup panel, Cloud Run deployment scripting, and transport tests. Its agent-facing endpoint uses [MCP Streamable HTTP](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports); the iPad makes a separate authenticated outbound HTTPS polling connection. Network work is queued for a Blender timer to execute on the main thread.
+The previous MCP prototype and its older build/input baseline are discarded. Its PR is closed, and its code is not integrated into `main`. Implement agent support afresh against the working 5.2 runtime and document layer. Do not merge or restore the obsolete prototype as an implementation shortcut.
 
-Its seven tools are `get_bridge_status`, `get_scene_summary`, `list_objects`, `run_capability_tests`, `create_primitive`, `set_object_transform`, and `save_blend_file`. The save tool creates new files inside app Documents. The prototype exposes named operations and does not provide arbitrary Python execution.
-
-This starting implementation is **not included in 5.2**, and deployment/device validation are unconfirmed. The PR lists deployment, connection setup, installation, and physical iPad testing as outstanding. Its temporary capability-URL/device-token authentication and single-instance in-memory broker need further work for multiple users, durable jobs, and broader client support. Port useful code to the 5.2 action/document layer; its older input/build baseline should not replace the current harness. See the [prototype README](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/blob/feature/ipad-mcp-bridge/mcp-server/README.md).
+[MCP Streamable HTTP](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports) remains an option for compatible external agents. Transport, authentication, connection lifecycle, and job handling will be designed and validated with the new shared action layer. No running MCP service or agent integration is claimed for build #81.
 
 ## Development priorities
 
-1. **Make project work dependable.** Validate build #81's save/open behavior, diagnose termination causes, and establish recovery and memory/render measurements under the installed signing profile.
-2. **Establish the common action layer.** Port useful MCP operations to 5.2; add context/capability discovery, identifiers, results, undo/checkpoints, and cancellation. Verify the same operations through each adapter.
+1. **Preserve and measure the working baseline.** Keep build #81's normal save/file behavior working, expand edge-case coverage, and establish recovery and memory/render measurements under the installed signing profile.
+2. **Establish the common action layer.** Implement directly against `main`'s 5.2 runtime; add context/capability discovery, identifiers, results, undo/checkpoints, and cancellation. Verify the same operations through each adapter.
 3. **Deliver an offline assistant milestone.** Add the Swift bridge and on-device model; demonstrate a local editing sequence and result inspection with networking disabled. Measure additional memory and latency alongside Blender.
 4. **Integrate Siri deeply.** Expose project entities and actions through App Intents/Shortcuts and matching schemas. Test actual invocation, foreground handoff, context resolution, and offline behavior on supported OS versions.
 5. **Open agent choice and expand coverage.** Validate multiple clients, reconnect/retry behavior, permissions, and longer creative workflows. Track supported operations against the catalog rather than treating a small tool list as the final product.
 
 ## Repository guide and contributions
 
-These links target the **5.2 branch**, including when reading this overview on `main`.
+All current code, build settings, and documentation live on **`main`**.
 
 | Location | Responsibility |
 |---|---|
-| [Build workflow](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/blob/upgrade/ios-5.2-m4-full/.github/workflows/build-unsigned-ipa.yml) | Bootstrap, configure, compile, package, and upload |
-| [`scripts/prepare-source.sh`](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/blob/upgrade/ios-5.2-m4-full/scripts/prepare-source.sh) | Source/library pins and ordered transforms |
-| [`patches/`](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/tree/upgrade/ios-5.2-m4-full/patches) | Blender/iOS, geometry, Files, linkage, codec, and NumPy changes |
-| [`scripts/apply-ios-files-scene.py`](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/blob/upgrade/ios-5.2-m4-full/scripts/apply-ios-files-scene.py) | Final native picker and scene handoff transformations |
-| [`scripts/verify-app-linkage.sh`](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/blob/upgrade/ios-5.2-m4-full/scripts/verify-app-linkage.sh) | Embedded Python and relative dependency checks; bundle manifest |
-| [`scripts/package-ipa.sh`](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/blob/upgrade/ios-5.2-m4-full/scripts/package-ipa.sh) | Bundle validation, mappings, signatures, and IPA profiles |
-| [`scripts/write-feature-manifest.sh`](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/blob/upgrade/ios-5.2-m4-full/scripts/write-feature-manifest.sh) | Required feature gates and complete feature manifest |
-| [Files regression checks](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/blob/upgrade/ios-5.2-m4-full/tests/test_ios_native_save_transform.py) | Seven source-text checks for native Files transforms |
+| [Build workflow](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/blob/main/.github/workflows/build-unsigned-ipa.yml) | Bootstrap, configure, compile, package, and upload |
+| [`scripts/prepare-source.sh`](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/blob/main/scripts/prepare-source.sh) | Source/library pins and ordered transforms |
+| [`patches/`](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/tree/main/patches) | Blender/iOS, geometry, Files, linkage, codec, and NumPy changes |
+| [`scripts/apply-ios-files-scene.py`](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/blob/main/scripts/apply-ios-files-scene.py) | Final native picker and scene handoff transformations |
+| [`scripts/verify-app-linkage.sh`](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/blob/main/scripts/verify-app-linkage.sh) | Embedded Python and relative dependency checks; bundle manifest |
+| [`scripts/package-ipa.sh`](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/blob/main/scripts/package-ipa.sh) | Bundle validation, mappings, signatures, and IPA profiles |
+| [`scripts/write-feature-manifest.sh`](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/blob/main/scripts/write-feature-manifest.sh) | Required feature gates and complete feature manifest |
+| [Files regression checks](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/blob/main/tests/test_ios_native_save_transform.py) | Seven source-text checks for native Files transforms |
 
 Keep feature removals explicit and evidence-based. Preserve the host/iOS dependency boundary, package the complete app, and associate device reports with an exact build and signing route. The seven Files checks passed during this audit; they inspect source text and do not exercise UIKit or Files providers. Run them with `python3 -m unittest discover -s tests -v` from the 5.2 checkout.
 

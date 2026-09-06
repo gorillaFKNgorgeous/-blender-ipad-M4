@@ -1,5 +1,12 @@
 # iPad native Open and Save audit
 
+## Current acceptance — 6 September 2026
+
+The owner confirms **build #81 is the current working iPad build**, with saving and file functions
+working in normal use. PR #5 has promoted that implementation to `main`, the sole development branch.
+The provider and edge-case matrix below remains follow-up validation; it does not negate the reported
+working baseline. The findings below document the fixes that led to this build.
+
 ## Build 77 findings and traced call paths
 
 Blender's ordinary **Save** does not request a picker once `Main.filepath` is established; it writes the
@@ -96,8 +103,8 @@ if a provider does not restore scope via a subsequent Files-app launch.
 ## Follow-up observations
 
 * Linux tests validate transformation contracts but cannot execute File Provider extensions or compile
-  Objective-C++ against the iPadOS SDK. Do not merge until the corrected workflow is built and the
-  complete device matrix above passes.
+  Objective-C++ against the iPadOS SDK. Build #81 compiled successfully and its saving/file behavior is
+  owner-confirmed. Complete the broader device matrix as follow-up coverage on this working baseline.
 * Run 79 exposed a build-validation false positive: counting every security-scope start and stop in the
   complete generated file conflated independent runtime paths. The guard now isolates
   `securityScopeDiagnostic`, requires exactly one start and one conditional stop inside that helper, and

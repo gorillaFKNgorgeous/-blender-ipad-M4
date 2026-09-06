@@ -3,15 +3,7 @@ name: Build full Blender 5.2 iPad M4 IPA
 on:
   push:
     branches:
-      - upgrade/ios-5.2-m4-full
-    paths:
-      - .github/workflows/build-unsigned-ipa.yml
-      - scripts/**
-      - patches/**
-      - README.md
-  pull_request:
-    branches:
-      - upgrade/ios-5.2-m4-full
+      - main
     paths:
       - .github/workflows/build-unsigned-ipa.yml
       - scripts/**
