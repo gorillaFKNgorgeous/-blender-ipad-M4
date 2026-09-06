@@ -16,7 +16,7 @@ This repository contains the workflows, dependency bootstrap, packaging scripts,
 | Device confirmation | The owner reports build #81 is installed and working, including saving and file functions. Earlier display/touch alignment fixes and scene loading are retained. |
 | Follow-up coverage | Provider and cancellation/replacement edge cases, cold/warm launches, sustained rendering, memory behavior, and recovery |
 | Main-branch promotion | PR #5 merged the accumulated 5.2 work into `main`. It contained build #81's implementation plus README updates. Subsequent consolidation changes concern documentation and workflow triggers. |
-| Older work | Obsolete input and MCP PRs are closed. Old version branches are being removed; further work belongs directly on `main`. |
+| Older work | Obsolete input and MCP PRs are closed. Old version branches have been deleted; further work belongs directly on `main`. |
 | Siri / assistant / agents | Planned. The obsolete MCP prototype has been rejected and is not part of this baseline. |
 
 PR #5 was large because it moved 72 accumulated commits into the old default branch. **Build #81 was built before that promotion, from `c9b9d48`; the PR did not introduce a different application implementation.** Its head differed from build #81 only in the README. The promotion was checked to preserve every non-documentation file, and the build job remains unchanged apart from its main-only trigger.

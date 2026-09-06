@@ -15,7 +15,7 @@ Updated: **6 September 2026**, following the owner's confirmation and repository
 
 ## Repository policy
 
-**`main` is the sole development branch and contains build #81's application implementation.** Work directly on `main`. Do not create additional branches or pull requests unless the owner explicitly changes this instruction. Old version branches are being removed, and obsolete PRs are closed.
+**`main` is the sole development branch and contains build #81's application implementation.** Work directly on `main`. Do not create additional branches or pull requests unless the owner explicitly changes this instruction. Old version branches have been deleted, and obsolete PRs are closed.
 
 PR #5 transferred 72 accumulated 5.2 commits into the older `main`. Its head differed from build #81 only in README.md. The merge was verified to preserve every file from build #81 apart from project documentation. The workflow trigger is now `main` plus manual dispatch; its build job, pins, patches, and packaging implementation are unchanged.
 
