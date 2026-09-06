@@ -1,0 +1,783 @@
+diff --git a/intern/ghost/intern/GHOST_SystemIOS.hh b/intern/ghost/intern/GHOST_SystemIOS.hh
+index 88db0b53..15a22cf4 100644
+--- a/intern/ghost/intern/GHOST_SystemIOS.hh
++++ b/intern/ghost/intern/GHOST_SystemIOS.hh
+@@ -188,6 +188,9 @@ class GHOST_SystemIOS : public GHOST_System {
+    */
+   GHOST_TSuccess setCursorPosition(int32_t x, int32_t y) override;
+ 
++  /** Record the last absolute cursor position reported by UIKit. */
++  void updateCursorPosition(int32_t x, int32_t y);
++
+   /***************************************************************************************
+    * Access to mouse button and keyboard states.
+    ***************************************************************************************/
+@@ -206,6 +209,9 @@ class GHOST_SystemIOS : public GHOST_System {
+    */
+   GHOST_TSuccess getButtons(GHOST_Buttons &buttons) const override;
+ 
++  /** Keep asynchronous pointer events and queried button state in sync. */
++  void setPointerButtonState(GHOST_TButton button, bool down);
++
+   GHOST_TCapabilityFlag getCapabilities() const override;
+ 
+   /**
+@@ -298,6 +304,8 @@ class GHOST_SystemIOS : public GHOST_System {
+    */
+   GHOST_TSuccess handleMouseEvent(void *eventPtr);
+ 
++#endif
++
+   /**
+    * Handles a key event.
+    * \param eventPtr: An #NSEvent pointer (cast to `void *` to enable compilation in standard C++).
+@@ -305,8 +313,6 @@ class GHOST_SystemIOS : public GHOST_System {
+    */
+   GHOST_TSuccess handleKeyEvent(void *eventPtr);
+ 
+-#endif
+-
+   /* Public global state vars that track the currently valid window from the iOS POV. */
+   GHOST_WindowIOS *current_active_window_ = nullptr;
+   GHOST_WindowIOS *next_active_window_ = nullptr;
+@@ -341,6 +347,13 @@ class GHOST_SystemIOS : public GHOST_System {
+   /** State of the modifiers. */
+   uint32_t modifier_mask_;
+ 
++  /** State of mouse/trackpad buttons, indexed by #GHOST_TButton. */
++  uint32_t pointer_button_mask_;
++
++  /** Last known external-pointer or touch cursor position. */
++  int32_t cursor_x_;
++  int32_t cursor_y_;
++
+   /** Ignores window size messages (when window is dragged). */
+   bool ignore_window_sized_message_;
+ 
+diff --git a/intern/ghost/intern/GHOST_SystemIOS.mm b/intern/ghost/intern/GHOST_SystemIOS.mm
+index 1937de87..91c75150 100644
+--- a/intern/ghost/intern/GHOST_SystemIOS.mm
++++ b/intern/ghost/intern/GHOST_SystemIOS.mm
+@@ -11,6 +11,7 @@
+ #include "GHOST_EventButton.hh"
+ #include "GHOST_EventCursor.hh"
+ #include "GHOST_EventDragnDrop.hh"
++#include "GHOST_EventKey.hh"
+ #include "GHOST_EventString.hh"
+ #include "GHOST_WindowManager.hh"
+ 
+@@ -376,6 +377,141 @@ GHOST_TKey convertKey(int rawCode, unichar recvChar, uint16_t /*keyAction*/)
+   return GHOST_kKeyUnknown;
+ }
+ 
++/**
++ * Convert the USB HID usage supplied by #UIKey into Blender's platform-neutral key code.
++ * UIKeyboardHIDUsage intentionally uses the USB HID values, so numeric ranges are stable across
++ * keyboard layouts and iPadOS releases.
++ */
++static GHOST_TKey convertIOSKeyToGHOST(const long usage)
++{
++  /* Alphabetic keys (USB HID 0x04 through 0x1d). */
++  if (usage >= 0x04 && usage <= 0x1d) {
++    return GHOST_TKey(GHOST_kKeyA + (usage - 0x04));
++  }
++
++  /* Number row 1 through 9 (0x1e through 0x26), followed by zero (0x27). */
++  if (usage >= 0x1e && usage <= 0x26) {
++    return GHOST_TKey(GHOST_kKey1 + (usage - 0x1e));
++  }
++  if (usage == 0x27) {
++    return GHOST_kKey0;
++  }
++
++  /* Function keys F1-F12 and F13-F24 occupy two HID ranges. */
++  if (usage >= 0x3a && usage <= 0x45) {
++    return GHOST_TKey(GHOST_kKeyF1 + (usage - 0x3a));
++  }
++  if (usage >= 0x68 && usage <= 0x73) {
++    return GHOST_TKey(GHOST_kKeyF13 + (usage - 0x68));
++  }
++
++  /* Keypad 1 through 9, then keypad zero. */
++  if (usage >= 0x59 && usage <= 0x61) {
++    return GHOST_TKey(GHOST_kKeyNumpad1 + (usage - 0x59));
++  }
++
++  switch (usage) {
++    case 0x28:
++    case 0x9e:
++      return GHOST_kKeyEnter;
++    case 0x29:
++      return GHOST_kKeyEsc;
++    case 0x2a:
++      return GHOST_kKeyBackSpace;
++    case 0x2b:
++      return GHOST_kKeyTab;
++    case 0x2c:
++      return GHOST_kKeySpace;
++    case 0x2d:
++      return GHOST_kKeyMinus;
++    case 0x2e:
++      return GHOST_kKeyEqual;
++    case 0x2f:
++      return GHOST_kKeyLeftBracket;
++    case 0x30:
++      return GHOST_kKeyRightBracket;
++    case 0x31:
++    case 0x64:
++      return GHOST_kKeyBackslash;
++    case 0x33:
++      return GHOST_kKeySemicolon;
++    case 0x34:
++      return GHOST_kKeyQuote;
++    case 0x35:
++      return GHOST_kKeyAccentGrave;
++    case 0x36:
++      return GHOST_kKeyComma;
++    case 0x37:
++      return GHOST_kKeyPeriod;
++    case 0x38:
++      return GHOST_kKeySlash;
++    case 0x39:
++      return GHOST_kKeyCapsLock;
++    case 0x46:
++      return GHOST_kKeyPrintScreen;
++    case 0x47:
++      return GHOST_kKeyScrollLock;
++    case 0x48:
++      return GHOST_kKeyPause;
++    case 0x49:
++      return GHOST_kKeyInsert;
++    case 0x4a:
++      return GHOST_kKeyHome;
++    case 0x4b:
++      return GHOST_kKeyUpPage;
++    case 0x4c:
++      return GHOST_kKeyDelete;
++    case 0x4d:
++      return GHOST_kKeyEnd;
++    case 0x4e:
++      return GHOST_kKeyDownPage;
++    case 0x4f:
++      return GHOST_kKeyRightArrow;
++    case 0x50:
++      return GHOST_kKeyLeftArrow;
++    case 0x51:
++      return GHOST_kKeyDownArrow;
++    case 0x52:
++      return GHOST_kKeyUpArrow;
++    case 0x53:
++      return GHOST_kKeyNumLock;
++    case 0x54:
++      return GHOST_kKeyNumpadSlash;
++    case 0x55:
++      return GHOST_kKeyNumpadAsterisk;
++    case 0x56:
++      return GHOST_kKeyNumpadMinus;
++    case 0x57:
++      return GHOST_kKeyNumpadPlus;
++    case 0x58:
++      return GHOST_kKeyNumpadEnter;
++    case 0x62:
++      return GHOST_kKeyNumpad0;
++    case 0x63:
++      return GHOST_kKeyNumpadPeriod;
++    case 0x65:
++      return GHOST_kKeyApp;
++    case 0xe0:
++      return GHOST_kKeyLeftControl;
++    case 0xe1:
++      return GHOST_kKeyLeftShift;
++    case 0xe2:
++      return GHOST_kKeyLeftAlt;
++    case 0xe3:
++      return GHOST_kKeyLeftOS;
++    case 0xe4:
++      return GHOST_kKeyRightControl;
++    case 0xe5:
++      return GHOST_kKeyRightShift;
++    case 0xe6:
++      return GHOST_kKeyRightAlt;
++    case 0xe7:
++      return GHOST_kKeyRightOS;
++    default:
++      return GHOST_kKeyUnknown;
++  }
++}
++
+ #pragma mark Utility functions
+ 
+ #define FIRSTFILEBUFLG 512
+@@ -404,6 +540,9 @@ GHOST_SystemIOS::GHOST_SystemIOS()
+   char *rstring = NULL;
+ 
+   modifier_mask_ = 0;
++  pointer_button_mask_ = 0;
++  cursor_x_ = 0;
++  cursor_y_ = 0;
+   outside_loop_event_processed_ = false;
+   need_delayed_application_become_active_event_processing_ = false;
+ 
+@@ -562,18 +701,14 @@ GHOST_TSuccess GHOST_SystemIOS::disposeContext(GHOST_IContext *context)
+   return GHOST_kSuccess;
+ }
+ 
+-/**
+- * \note : returns 0,0 on ios as no cursor is present.
+- * TODO: If external mouse or trackpad is connected, we can query cursor position.
+- */
+-GHOST_TSuccess GHOST_SystemIOS::getCursorPosition(int32_t & /*x*/, int32_t & /*y*/) const
++GHOST_TSuccess GHOST_SystemIOS::getCursorPosition(int32_t &x, int32_t &y) const
+ {
+-  /* iOS Passthrough. */
+   GHOST_IWindow *window = this->window_manager_->getActiveWindow();
+   if (!window) {
+     return GHOST_kFailure;
+   }
+-  // GHOST_ASSERT(FALSE,"GHOST_SystemIOS::getCursorPosition unsupported on iOS");
++  x = cursor_x_;
++  y = cursor_y_;
+   return GHOST_kSuccess;
+ }
+ 
+@@ -587,6 +722,7 @@ GHOST_TSuccess GHOST_SystemIOS::setCursorPosition(int32_t x, int32_t y)
+   if (!window)
+     return GHOST_kFailure;
+ 
++  updateCursorPosition(x, y);
+   pushEvent(std::make_unique<GHOST_EventCursor>(
+       getMilliSeconds(), GHOST_kEventCursorMove, window, x, y, window->getTabletData()));
+   outside_loop_event_processed_ = true;
+@@ -594,6 +730,12 @@ GHOST_TSuccess GHOST_SystemIOS::setCursorPosition(int32_t x, int32_t y)
+   return GHOST_kSuccess;
+ }
+ 
++void GHOST_SystemIOS::updateCursorPosition(const int32_t x, const int32_t y)
++{
++  cursor_x_ = x;
++  cursor_y_ = y;
++}
++
+ GHOST_TSuccess GHOST_SystemIOS::setMouseCursorPosition(int32_t /*x*/, int32_t /*y*/)
+ {
+   /* iOS Passthrough. */
+@@ -604,17 +746,35 @@ GHOST_TSuccess GHOST_SystemIOS::setMouseCursorPosition(int32_t /*x*/, int32_t /*
+   return GHOST_kSuccess;
+ }
+ 
+-GHOST_TSuccess GHOST_SystemIOS::getModifierKeys(GHOST_ModifierKeys & /*keys*/) const
++GHOST_TSuccess GHOST_SystemIOS::getModifierKeys(GHOST_ModifierKeys &keys) const
+ {
+-  /* iOS Passthrough. */
++  keys.set(GHOST_kModifierKeyLeftOS, (modifier_mask_ & UIKeyModifierCommand) != 0);
++  keys.set(GHOST_kModifierKeyLeftAlt, (modifier_mask_ & UIKeyModifierAlternate) != 0);
++  keys.set(GHOST_kModifierKeyLeftShift, (modifier_mask_ & UIKeyModifierShift) != 0);
++  keys.set(GHOST_kModifierKeyLeftControl, (modifier_mask_ & UIKeyModifierControl) != 0);
+   return GHOST_kSuccess;
+ }
+ 
+-GHOST_TSuccess GHOST_SystemIOS::getButtons(GHOST_Buttons & /*buttons*/) const
++GHOST_TSuccess GHOST_SystemIOS::getButtons(GHOST_Buttons &buttons) const
+ {
+-  /* iOS Passthrough. */
++  buttons.clear();
++  for (int button = 0; button < GHOST_kButtonNum; button++) {
++    buttons.set(GHOST_TButton(button), (pointer_button_mask_ & (1u << button)) != 0);
++  }
+   return GHOST_kSuccess;
+ }
++
++void GHOST_SystemIOS::setPointerButtonState(const GHOST_TButton button, const bool down)
++{
++  const uint32_t mask = 1u << uint32_t(button);
++  if (down) {
++    pointer_button_mask_ |= mask;
++  }
++  else {
++    pointer_button_mask_ &= ~mask;
++  }
++}
++
+ GHOST_TCapabilityFlag GHOST_SystemIOS::getCapabilities() const
+ {
+   return GHOST_TCapabilityFlag(GHOST_kCapabilityGPUReadFrontBuffer);
+@@ -638,6 +798,7 @@ bool GHOST_SystemIOS::processEvents(bool /*waitForEvent*/)
+ GHOST_TSuccess GHOST_SystemIOS::handleApplicationBecomeActiveEvent()
+ {
+   modifier_mask_ = 0;
++  pointer_button_mask_ = 0;
+ 
+   outside_loop_event_processed_ = true;
+   return GHOST_kSuccess;
+@@ -967,6 +1128,69 @@ GHOST_TSuccess GHOST_SystemIOS::handleKeyEvent(void * /*eventPtr*/)
+ }
+ #endif
+ 
++GHOST_TSuccess GHOST_SystemIOS::handleKeyEvent(void *eventPtr)
++{
++  UIPress *press = static_cast<UIPress *>(eventPtr);
++  if (press == nil || press.key == nil) {
++    return GHOST_kFailure;
++  }
++
++  GHOST_IWindow *window = window_manager_->getActiveWindow();
++  if (window == nullptr) {
++    return GHOST_kFailure;
++  }
++
++  modifier_mask_ = uint32_t(press.key.modifierFlags);
++  const GHOST_TKey key_code = convertIOSKeyToGHOST(long(press.key.keyCode));
++  if (key_code == GHOST_kKeyUnknown) {
++    return GHOST_kFailure;
++  }
++
++  char utf8_buf[6] = {'\0'};
++  NSString *characters = press.key.characters;
++  if (characters.length > 0) {
++    NSData *encoded = [characters dataUsingEncoding:NSUTF8StringEncoding];
++    if (encoded.length > 0 && encoded.length < sizeof(utf8_buf)) {
++      memcpy(utf8_buf, encoded.bytes, encoded.length);
++    }
++  }
++
++  /* Navigation, function and Command shortcuts do not represent text insertion. */
++  if (((key_code >= GHOST_kKeyLeftArrow) && (key_code <= GHOST_kKeyDownArrow)) ||
++      ((key_code >= GHOST_kKeyF1) && (key_code <= GHOST_kKeyF24)) ||
++      (modifier_mask_ & UIKeyModifierCommand))
++  {
++    utf8_buf[0] = '\0';
++  }
++
++  switch (press.phase) {
++    case UIPressPhaseBegan:
++      pushEvent(std::make_unique<GHOST_EventKey>(getMilliSeconds(),
++                                                 GHOST_kEventKeyDown,
++                                                 window,
++                                                 key_code,
++                                                 false,
++                                                 utf8_buf));
++      return GHOST_kSuccess;
++    case UIPressPhaseChanged:
++    case UIPressPhaseStationary:
++      pushEvent(std::make_unique<GHOST_EventKey>(getMilliSeconds(),
++                                                 GHOST_kEventKeyDown,
++                                                 window,
++                                                 key_code,
++                                                 true,
++                                                 utf8_buf));
++      return GHOST_kSuccess;
++    case UIPressPhaseEnded:
++    case UIPressPhaseCancelled:
++      pushEvent(std::make_unique<GHOST_EventKey>(
++          getMilliSeconds(), GHOST_kEventKeyUp, window, key_code, false, nullptr));
++      return GHOST_kSuccess;
++  }
++
++  return GHOST_kFailure;
++}
++
+ #pragma mark Clipboard get/set
+ 
+ char *GHOST_SystemIOS::getClipboard(bool /*selection*/) const
+diff --git a/intern/ghost/intern/GHOST_WindowIOS.mm b/intern/ghost/intern/GHOST_WindowIOS.mm
+index 56d2ffa6..9cb85145 100644
+--- a/intern/ghost/intern/GHOST_WindowIOS.mm
++++ b/intern/ghost/intern/GHOST_WindowIOS.mm
+@@ -162,6 +162,16 @@ typedef struct UserInputEvent {
+ }
+ @end
+ 
++@interface GHOSTUIScrollGestureRecognizer : GHOSTUIPanGestureRecognizer
++@end
++
++@implementation GHOSTUIScrollGestureRecognizer
++- (BOOL)shouldReceiveEvent:(UIEvent *)event
++{
++  return event.type == UIEventTypeScroll;
++}
++@end
++
+ @interface GHOSTUIHoverGestureRecognizer : UIHoverGestureRecognizer
+ - (CGPoint)getScaledTouchPoint:(GHOST_WindowIOS *)window;
+ @end
+@@ -175,6 +185,61 @@ typedef struct UserInputEvent {
+ }
+ @end
+ 
++/**
++ * Immediate button/drag recognizer for an indirect pointer. A tap recognizer only reports after
++ * release, which is too late for Blender's modal mouse interactions and cannot represent dragging.
++ */
++@interface GHOSTUIPointerGestureRecognizer : UIGestureRecognizer
++{
++  UIEventButtonMask pressed_button_mask;
++}
++- (CGPoint)getScaledPointerPoint:(GHOST_WindowIOS *)window;
++- (UIEventButtonMask)getPressedButtonMask;
++@end
++
++@implementation GHOSTUIPointerGestureRecognizer
++
++- (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event
++{
++  pressed_button_mask = event.buttonMask;
++  self.state = pressed_button_mask ? UIGestureRecognizerStateBegan :
++                                     UIGestureRecognizerStateFailed;
++}
++
++- (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event
++{
++  self.state = UIGestureRecognizerStateChanged;
++}
++
++- (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event
++{
++  self.state = UIGestureRecognizerStateEnded;
++}
++
++- (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event
++{
++  self.state = UIGestureRecognizerStateCancelled;
++}
++
++- (void)reset
++{
++  pressed_button_mask = (UIEventButtonMask)0;
++  [super reset];
++}
++
++- (CGPoint)getScaledPointerPoint:(GHOST_WindowIOS *)window
++{
++  CGPoint point = [self locationInView:window->getView()];
++  return window->scalePointToWindow(point);
++}
++
++- (UIEventButtonMask)getPressedButtonMask
++{
++  return pressed_button_mask;
++}
++
++@end
++
+ @interface GHOSTUIPinchGestureRecognizer : UIPinchGestureRecognizer
+ {
+   CGFloat cached_distance;
+@@ -239,8 +304,11 @@ typedef struct UserInputEvent {
+   GHOSTUITapGestureRecognizer *tap4f_gesture_recognizer;
+   GHOSTUIPanGestureRecognizer *pan_gesture_recognizer;
+   GHOSTUIPanGestureRecognizer *pan2f_gesture_recognizer;
++  GHOSTUIScrollGestureRecognizer *scroll_gesture_recognizer;
+   GHOSTUIPinchGestureRecognizer *zoom_gesture_recognizer;
+   GHOSTUIHoverGestureRecognizer *hover_gesture_recognizer;
++  GHOSTUIHoverGestureRecognizer *pointer_hover_gesture_recognizer;
++  GHOSTUIPointerGestureRecognizer *pointer_gesture_recognizer;
+   UIPencilInteraction *pencil_interaction;
+   UIScreenEdgePanGestureRecognizer *edge_swipe_left;
+   UIScreenEdgePanGestureRecognizer *edge_swipe_right;
+@@ -282,6 +350,9 @@ typedef struct UserInputEvent {
+ - (void)handlePan:(GHOSTUIPanGestureRecognizer *)sender;
+ - (void)handlePan2f:(GHOSTUIPanGestureRecognizer *)sender;
+ - (void)handleZoom:(GHOSTUIPinchGestureRecognizer *)sender;
++- (void)handlePointerHover:(GHOSTUIHoverGestureRecognizer *)sender;
++- (void)handlePointerGesture:(GHOSTUIPointerGestureRecognizer *)sender;
++- (void)sendPointerButtons:(UIEventButtonMask)button_mask down:(BOOL)down;
+ 
+ /* On screen keyboard handling */
+ - (UITextField *)getUITextField;
+@@ -402,6 +473,15 @@ typedef struct UserInputEvent {
+   pan2f_gesture_recognizer.maximumNumberOfTouches = 2;
+   [window->getView() addGestureRecognizer:pan2f_gesture_recognizer];
+ 
++  /* Scroll events are not touch-based. Keep them separate from finger and pointer drags. */
++  scroll_gesture_recognizer = [[GHOSTUIScrollGestureRecognizer alloc]
++      initWithTarget:self
++              action:@selector(handlePan2f:)];
++  scroll_gesture_recognizer.delegate = self;
++  scroll_gesture_recognizer.cancelsTouchesInView = false;
++  scroll_gesture_recognizer.allowedScrollTypesMask = UIScrollTypeMaskAll;
++  [window->getView() addGestureRecognizer:scroll_gesture_recognizer];
++
+   /* Pinch/Zoom gesture recognizer. */
+   zoom_gesture_recognizer = [[GHOSTUIPinchGestureRecognizer alloc]
+       initWithTarget:self
+@@ -430,9 +510,27 @@ typedef struct UserInputEvent {
+       initWithTarget:self
+               action:@selector(handleHover:)];
+   hover_gesture_recognizer.delegate = self;
++  hover_gesture_recognizer.allowedTouchTypes = @[ @(UITouchTypePencil) ];
+   [window->getView() addGestureRecognizer:hover_gesture_recognizer];
+   current_pencil_touch = nil;
+ 
++  /* Mouse/trackpad hover must remain ordinary cursor input, not tablet input. */
++  pointer_hover_gesture_recognizer = [[GHOSTUIHoverGestureRecognizer alloc]
++      initWithTarget:self
++              action:@selector(handlePointerHover:)];
++  pointer_hover_gesture_recognizer.delegate = self;
++  pointer_hover_gesture_recognizer.allowedTouchTypes = @[ @(UITouchTypeIndirectPointer) ];
++  [window->getView() addGestureRecognizer:pointer_hover_gesture_recognizer];
++
++  /* Preserve actual button-down, drag and button-up phases for every pointer button. */
++  pointer_gesture_recognizer = [[GHOSTUIPointerGestureRecognizer alloc]
++      initWithTarget:self
++              action:@selector(handlePointerGesture:)];
++  pointer_gesture_recognizer.delegate = self;
++  pointer_gesture_recognizer.cancelsTouchesInView = false;
++  pointer_gesture_recognizer.allowedTouchTypes = @[ @(UITouchTypeIndirectPointer) ];
++  [window->getView() addGestureRecognizer:pointer_gesture_recognizer];
++
+   /**  Apple Pencil double-tap. */
+   pencil_interaction = [[UIPencilInteraction alloc] init];
+   pencil_interaction.delegate = self;
+@@ -457,6 +555,7 @@ typedef struct UserInputEvent {
+ 
+       switch (event_type) {
+         case UserInputEvent::EventTypes::CURSOR_MOVE:
++          system->updateCursorPosition(event_info.location.x, event_info.location.y);
+           system->pushEvent(std::make_unique<GHOST_EventCursor>(system->getMilliSeconds(),
+                                                                 GHOST_kEventCursorMove,
+                                                                 window,
+@@ -795,34 +894,132 @@ typedef struct UserInputEvent {
+   }
+ }
+ 
+-- (void)handleZoom:(GHOSTUIPinchGestureRecognizer *)sender
++- (void)handlePointerHover:(GHOSTUIHoverGestureRecognizer *)sender
+ {
+-  /* Ignore any calls where don't have two touches to work with. */
+-  if ([sender numberOfTouches] < 2) {
++  if (sender.state != UIGestureRecognizerStateBegan &&
++      sender.state != UIGestureRecognizerStateChanged)
++  {
+     return;
+   }
+ 
++  tablet_data = GHOST_TABLET_DATA_NONE;
++  CGPoint point = [sender getScaledTouchPoint:window];
++  system->updateCursorPosition(point.x, point.y);
++  system->pushEvent(std::make_unique<GHOST_EventCursor>(system->getMilliSeconds(),
++                                                        GHOST_kEventCursorMove,
++                                                        window,
++                                                        point.x,
++                                                        point.y,
++                                                        GHOST_TABLET_DATA_NONE));
++}
++
++- (void)sendPointerButtons:(UIEventButtonMask)button_mask down:(BOOL)down
++{
++  const NSUInteger buttons = NSUInteger(button_mask);
++  for (int button_number = 1; button_number <= 7; button_number++) {
++    if ((buttons & (NSUInteger(1) << (button_number - 1))) == 0) {
++      continue;
++    }
++
++    GHOST_TButton ghost_button;
++    switch (button_number) {
++      case 1:
++        ghost_button = GHOST_kButtonMaskLeft;
++        break;
++      case 2:
++        ghost_button = GHOST_kButtonMaskRight;
++        break;
++      case 3:
++        ghost_button = GHOST_kButtonMaskMiddle;
++        break;
++      case 4:
++        ghost_button = GHOST_kButtonMaskButton4;
++        break;
++      case 5:
++        ghost_button = GHOST_kButtonMaskButton5;
++        break;
++      case 6:
++        ghost_button = GHOST_kButtonMaskButton6;
++        break;
++      default:
++        ghost_button = GHOST_kButtonMaskButton7;
++        break;
++    }
++
++    system->setPointerButtonState(ghost_button, down);
++    system->pushEvent(std::make_unique<GHOST_EventButton>(system->getMilliSeconds(),
++                                                          down ? GHOST_kEventButtonDown :
++                                                                 GHOST_kEventButtonUp,
++                                                          window,
++                                                          ghost_button,
++                                                          GHOST_TABLET_DATA_NONE));
++  }
++}
++
++- (void)handlePointerGesture:(GHOSTUIPointerGestureRecognizer *)sender
++{
++  const UIGestureRecognizerState state = sender.state;
++  const UIEventButtonMask button_mask = [sender getPressedButtonMask];
++
++  if (state == UIGestureRecognizerStateBegan || state == UIGestureRecognizerStateChanged ||
++      state == UIGestureRecognizerStateEnded)
++  {
++    tablet_data = GHOST_TABLET_DATA_NONE;
++    CGPoint point = [sender getScaledPointerPoint:window];
++    system->updateCursorPosition(point.x, point.y);
++    system->pushEvent(std::make_unique<GHOST_EventCursor>(system->getMilliSeconds(),
++                                                          GHOST_kEventCursorMove,
++                                                          window,
++                                                          point.x,
++                                                          point.y,
++                                                          GHOST_TABLET_DATA_NONE));
++  }
++
++  if (state == UIGestureRecognizerStateBegan) {
++    [self sendPointerButtons:button_mask down:YES];
++  }
++  else if (state == UIGestureRecognizerStateEnded ||
++           state == UIGestureRecognizerStateCancelled ||
++           state == UIGestureRecognizerStateFailed)
++  {
++    [self sendPointerButtons:button_mask down:NO];
++  }
++}
++
++- (void)handleZoom:(GHOSTUIPinchGestureRecognizer *)sender
++{
+   /* Pinch/Zoom gestures */
+   if (sender.state == UIGestureRecognizerStateBegan) {
+-    /* Set an initial distance value. */
+-    CGFloat point_distance = [sender getScaledDistance:window];
+-    [sender setCachedDistance:point_distance];
++    /* Direct touch exposes two points. Trackpad transform events expose scale and no touches. */
++    const CGFloat initial_value = [sender numberOfTouches] >= 2 ?
++                                      [sender getScaledDistance:window] :
++                                      sender.scale;
++    [sender setCachedDistance:initial_value];
+   }
+   else if (sender.state == UIGestureRecognizerStateChanged) {
+-
+-    /* Calculate change in distance since last event */
+-    CGFloat point_distance = [sender getScaledDistance:window];
+-    CGFloat relative_dist = point_distance - [sender getCachedDistance];
++    CGPoint midpoint;
++    CGFloat current_value;
++    CGFloat relative_dist;
++
++    if ([sender numberOfTouches] >= 2) {
++      current_value = [sender getScaledDistance:window];
++      relative_dist = current_value - [sender getCachedDistance];
++      midpoint = [sender getPinchMidpoint:window];
++    }
++    else {
++      current_value = sender.scale;
++      /* GHOST stores magnification as an integer delta; retain small trackpad changes. */
++      relative_dist = (current_value - [sender getCachedDistance]) * 200.0f;
++      midpoint = [sender locationInView:window->getView()];
++      midpoint = window->scalePointToWindow(midpoint);
++    }
+ 
+     /* Updated cached distance. */
+-    [sender setCachedDistance:point_distance];
++    [sender setCachedDistance:current_value];
+ 
+     /* Send pinch/zoom event. */
+     if (fabs(relative_dist) > 0.0) {
+-      /* Calculate midpoint between the two touch points. */
+-      CGPoint midPoint = [sender getPinchMidpoint:window];
+-
+-      UserInputEvent event_info(&midPoint, nullptr, &relative_dist, false);
++      UserInputEvent event_info(&midpoint, nullptr, &relative_dist, false);
+       event_info.add_event(UserInputEvent::EventTypes::PINCH_GESTURE);
+       [self generateUserInputEvents:event_info];
+     }
+@@ -832,6 +1029,7 @@ typedef struct UserInputEvent {
+            sender.state == UIGestureRecognizerStateCancelled ||
+            sender.state == UIGestureRecognizerStateFailed)
+   {
++    [sender setCachedDistance:0.0f];
+   }
+ }
+ 
+@@ -1250,6 +1448,10 @@ typedef struct UserInputEvent {
+        */
+ 
+       IOS_INPUT_LOG(@"Resigned keyboard responder");
++      /* Return raw shortcut handling to Blender after text entry ends. */
++      if (![self.rootViewController becomeFirstResponder]) {
++        IOS_INPUT_LOG(@"Unable to restore hardware keyboard responder");
++      }
+       /*
+        This is required to disable any subsequent interactions with the text field that could
+        potentially bypass Blender's input handling (since the UITextField is now live
+@@ -1332,6 +1534,53 @@ typedef struct UserInputEvent {
+   _view.delegate = _renderer;
+ }
+ 
++- (BOOL)canBecomeFirstResponder
++{
++  return YES;
++}
++
++- (BOOL)handleHardwarePresses:(NSSet<UIPress *> *)presses
++{
++  GHOST_SystemIOS *system = static_cast<GHOST_SystemIOS *>(GHOST_ISystem::getSystem());
++  if (system == nullptr) {
++    return NO;
++  }
++
++  BOOL handled = NO;
++  for (UIPress *press in presses) {
++    handled |= system->handleKeyEvent((void *)press) == GHOST_kSuccess;
++  }
++  return handled;
++}
++
++- (void)pressesBegan:(NSSet<UIPress *> *)presses withEvent:(UIPressesEvent *)event
++{
++  if (![self handleHardwarePresses:presses]) {
++    [super pressesBegan:presses withEvent:event];
++  }
++}
++
++- (void)pressesChanged:(NSSet<UIPress *> *)presses withEvent:(UIPressesEvent *)event
++{
++  if (![self handleHardwarePresses:presses]) {
++    [super pressesChanged:presses withEvent:event];
++  }
++}
++
++- (void)pressesEnded:(NSSet<UIPress *> *)presses withEvent:(UIPressesEvent *)event
++{
++  if (![self handleHardwarePresses:presses]) {
++    [super pressesEnded:presses withEvent:event];
++  }
++}
++
++- (void)pressesCancelled:(NSSet<UIPress *> *)presses withEvent:(UIPressesEvent *)event
++{
++  if (![self handleHardwarePresses:presses]) {
++    [super pressesCancelled:presses withEvent:event];
++  }
++}
++
+ - (void)handleGesture:(UIGestureRecognizer *)gestureRecognizer
+ {
+ }
+@@ -1896,6 +2145,10 @@ bool GHOST_WindowIOS::makeKeyWindow()
+ 
+   /* Make window primary visible window. */
+   [rootWindow makeKeyAndVisible];
++  /* Raw hardware-key events are delivered only to the first responder of the key window. */
++  if (![uiview_controller_ becomeFirstResponder]) {
++    IOS_INPUT_LOG(@"Unable to activate hardware keyboard responder");
++  }
+   /* Enable the drawInMTKView() calls for this window. */
+   metal_view_.paused = NO;
+ 
+diff --git a/release/ios/Blender.app/Info.plist b/release/ios/Blender.app/Info.plist
+index e478b5b7..0e9cb949 100644
+--- a/release/ios/Blender.app/Info.plist
++++ b/release/ios/Blender.app/Info.plist
+@@ -53,6 +53,8 @@
+ 	<true/>
+ 	<key>UIRequiresFullScreen</key>
+ 	<true/>
++	<key>UIApplicationSupportsIndirectInputEvents</key>
++	<true/>
+ 	<key>UIViewControllerBasedStatusBarAppearance</key>
+ 	<false/>
+ 	<key>UIStatusBarHidden</key>

@@ -1,16 +1,26 @@
-name: Build unsigned iPad IPA
+name: Build full Blender 5.2 iPad M4 IPA
 
 on:
   push:
     branches:
-      - main
+      - upgrade/ios-5.2-m4-full
     paths:
       - .github/workflows/build-unsigned-ipa.yml
       - scripts/**
+      - patches/**
+      - README.md
+  pull_request:
+    branches:
+      - upgrade/ios-5.2-m4-full
+    paths:
+      - .github/workflows/build-unsigned-ipa.yml
+      - scripts/**
+      - patches/**
+      - README.md
   workflow_dispatch:
 
 concurrency:
-  group: blender-ipad-m4-${{ github.ref }}
+  group: blender-5.2-ipad-m4-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -18,15 +28,13 @@ permissions:
 
 jobs:
   build:
-    name: Blender iPad M4 bring-up
+    name: Blender 5.2 LTS / iPadOS 27 / M4 full profile
     runs-on: macos-15
-    timeout-minutes: 240
+    timeout-minutes: 360
 
     env:
-      BLENDER_REF: 19542aff486fe6db878ecdbc795999d50499406e
-      KEYBOARD_PR_REF: refs/pull/145484/head
-      KEYBOARD_PR_SHA: 19542aff486fe6db878ecdbc795999d50499406e
-      BUNDLE_ID: com.gorillafkngorgeous.blenderipad
+      BLENDER_REF: 2bc556e58e82eb3a801895f2cb1881c0267e5cd5
+      BUNDLE_ID: com.gorillafkngorgeous.blenderipad52
       SOURCE_DIR: ${{ github.workspace }}/work/blender
       BUILD_DIR: ${{ github.workspace }}/work/build-ios
       ARTIFACT_DIR: ${{ github.workspace }}/artifacts
@@ -35,85 +43,923 @@ jobs:
       - name: Check out build harness
         uses: actions/checkout@v4
 
-      - name: Select Xcode 16.4
+      - name: Select Xcode 26.3 and iOS 26 SDK
         run: |
-          sudo xcode-select -s /Applications/Xcode_16.4.app/Contents/Developer
+          sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
           xcodebuild -version
+          test "$(xcodebuild -version | awk '/Xcode/{print $2}' | cut -d. -f1)" -ge 26
           xcrun --sdk iphoneos --show-sdk-version
+          xcrun --sdk iphoneos --show-sdk-path
 
-      - name: Check host tools and capacity
+      - name: Check Apple-silicon host tools and capacity
         run: |
+          mkdir -p "$ARTIFACT_DIR"
+          test -d "$ARTIFACT_DIR"
+          test "$(uname -m)" = arm64
           uname -a
-          uname -m
           cmake --version
           git lfs version
+          sysctl -n hw.ncpu
           df -h
 
-      - name: Prepare pinned Blender source and libraries
+      - name: Prepare pinned Blender 5.2 iOS source and libraries
         run: bash ./scripts/prepare-source.sh "$SOURCE_DIR"
 
-      - name: Configure Xcode project
+      - name: Apply iOS codec framework integration
         run: |
+          set -euo pipefail
+          codec_patch="$GITHUB_WORKSPACE/patches/ios-codec-frameworks.patch"
+          git -C "$SOURCE_DIR" apply --check "$codec_patch"
+          git -C "$SOURCE_DIR" apply "$codec_patch"
+          grep -F 'add_library(bf_intern_draco_bridge SHARED' \
+            "$SOURCE_DIR/intern/draco_bridge/CMakeLists.txt" >/dev/null
+          grep -F 'add_library(bf_intern_meshopt_bridge SHARED' \
+            "$SOURCE_DIR/intern/meshoptimizer_bridge/CMakeLists.txt" >/dev/null
+          grep -F "'ios': 'lib{}.fwork'.format(lib_name)" \
+            "$SOURCE_DIR/scripts/addons_core/io_scene_gltf2/io/com/library.py" >/dev/null
+          echo "Applied self-contained iOS glTF codec bridge integration"
+
+      - name: Clear iOS dependency cache overlay targets
+        run: |
+          set -euo pipefail
+          ios_lib_root="$SOURCE_DIR/lib/ios_arm64"
+          test -d "$ios_lib_root"
+
+          # actions/cache restores by overlaying files; it does not delete stale files
+          # already present in the fresh library checkout. Clear only the exact cache
+          # targets so a hit reproduces the saved dependency tree byte-for-byte.
+          for dependency in \
+            python \
+            ssl \
+            ffi \
+            sqlite \
+            zlib \
+            bzip2 \
+            lzma \
+            libb2 \
+            draco \
+            meshoptimizer
+          do
+            target="$ios_lib_root/$dependency"
+            case "$target" in
+              "$ios_lib_root"/*) ;;
+              *)
+                echo "::error::Refusing to clear unexpected cache target: $target"
+                exit 1
+                ;;
+            esac
+            if [[ -e "$target" || -L "$target" ]]; then
+              echo "Clearing cache overlay target: $target"
+              rm -rf -- "$target"
+            fi
+          done
+
+      - name: Restore Python 3.13, NumPy, and codec dependency cache
+        id: ios-bootstrap-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            work/host-python-3.13.13
+            work/blender/lib/ios_arm64/python
+            work/blender/lib/ios_arm64/ssl
+            work/blender/lib/ios_arm64/ffi
+            work/blender/lib/ios_arm64/sqlite
+            work/blender/lib/ios_arm64/zlib
+            work/blender/lib/ios_arm64/bzip2
+            work/blender/lib/ios_arm64/lzma
+            work/blender/lib/ios_arm64/libb2
+            work/blender/lib/ios_arm64/draco
+            work/blender/lib/ios_arm64/meshoptimizer
+          # v6 switches Draco and meshoptimizer from loose shared libraries to static
+          # archives embedded in their loadable glTF bridge frameworks.
+          key: ios-5.2-bootstrap-${{ runner.os }}-xcode-26.3-${{ env.BLENDER_REF }}-python-3.13.13-numpy-2.3.4-draco-meshopt-static-v6
+
+      - name: Install dependency build tools
+        if: steps.ios-bootstrap-cache.outputs.cache-hit != 'true'
+        run: |
+          brew install \
+            autoconf \
+            automake \
+            bison \
+            dos2unix \
+            flex \
+            libtool \
+            meson \
+            ninja \
+            pkg-config \
+            yasm
+
+          echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
+
+      - name: Build official iOS Python 3.13, NumPy, Draco, and Meshoptimizer
+        if: steps.ios-bootstrap-cache.outputs.cache-hit != 'true'
+        run: |
+          set -o pipefail
+
+          host_deps_root="$GITHUB_WORKSPACE/work/host-deps"
+          host_python_prefix="$GITHUB_WORKSPACE/work/host-python-3.13.13"
+          host_python_src="$GITHUB_WORKSPACE/work/python-host-3.13.13"
+          ios_python_src="$GITHUB_WORKSPACE/work/python-ios-3.13.13"
+          numpy_src="$GITHUB_WORKSPACE/work/numpy-ios-2.3.4"
+          numpy_wheelhouse="$GITHUB_WORKSPACE/work/numpy-ios-wheelhouse"
+          zstandard_src="$GITHUB_WORKSPACE/work/zstandard-ios-0.25.0"
+          zstandard_wheelhouse="$GITHUB_WORKSPACE/work/zstandard-ios-wheelhouse"
+          deps_build="$GITHUB_WORKSPACE/work/deps-ios-bootstrap"
+          download_cmake="$SOURCE_DIR/build_files/build_environment/cmake/download.cmake"
+          dependency_cmakelists="$SOURCE_DIR/build_files/build_environment/CMakeLists.txt"
+
+          dump_dependency_logs() {
+            find "$deps_build" "$host_python_src" "$ios_python_src" "$numpy_src" "$zstandard_src" \
+              -name config.log -type f -print -exec tail -n 160 {} \; 2>/dev/null || true
+          }
+          trap dump_dependency_logs ERR
+
+          mkdir -p "$host_deps_root/deps_arm64/Release"
+          ln -s "$SOURCE_DIR/lib/macos_arm64/python" \
+            "$host_deps_root/deps_arm64/Release/python"
+
+          # The dependency project normally downloads and configures every desktop package.
+          # Limit this bootstrap to the exact missing iOS capabilities and Python's direct libs.
+          perl -0pi -e '
+            s/^download_source\((?!ZLIB\)|PYTHON\)|NUMPY\)|ZSTANDARD\)|LIBB2\)|BZIP2\)|FFI\)|LZMA\)|SSL\)|SQLITE\)|DRACO\)|MESHOPTIMIZER\))([A-Z0-9_]+)\)$/# Focused iOS bootstrap skips $1/mg
+          ' "$download_cmake"
+          test "$(grep -c '^download_source(' "$download_cmake")" -eq 12
+
+          perl -0pi -e '
+            s{^(\s*)include\(cmake/([^)]+)\)$}{$1# Focused iOS bootstrap skips cmake/$2}mg;
+            s{^(\s*)# Focused iOS bootstrap skips cmake/(check_software|options|versions|download|macros|check_compilers|harvest|ssl|zlib|python|libb2|ffi|sqlite|bzip2|lzma|draco|meshoptimizer)\.cmake$}{$1include(cmake/$2.cmake)}mg
+          ' "$dependency_cmakelists"
+          test "$(grep -c '^[[:space:]]*include(cmake/' "$dependency_cmakelists")" -eq 17
+
+          cmake \
+            -S "$SOURCE_DIR/build_files/build_environment" \
+            -B "$deps_build" \
+            -DAPPLE_TARGET_DEVICE=ios \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0 \
+            -DCMAKE_DEPS_CROSSCOMPILE_BUILDDIR="$host_deps_root" \
+            -DCMAKE_DEPS_CROSSCOMPILE_INSTALLDIR="$SOURCE_DIR/lib/macos_arm64" \
+            -DHARVEST_TARGET="$SOURCE_DIR/lib/ios_arm64" \
+            -DMAKE_THREADS=3 \
+            2>&1 | tee "$GITHUB_WORKSPACE/bootstrap-configure.log"
+
+          # Build the iOS prerequisites first. Python itself is built directly below so its
+          # official iOS host triple and compiler wrappers are not replaced by Blender's
+          # legacy Darwin cross-build shim.
+          cmake --build "$deps_build" \
+            --target \
+              external_zlib \
+              external_libb2 \
+              external_bzip2 \
+              external_ffi \
+              external_lzma \
+              external_ssl \
+              external_sqlite \
+              external_draco \
+              external_meshoptimizer \
+            --parallel 3 \
+            2>&1 | tee "$GITHUB_WORKSPACE/bootstrap-build.log"
+
+          # CPython must consume the just-built iOS libffi, never Homebrew's macOS libffi.
+          ios_libffi="$deps_build/Release/ffi/lib/libffi.a"
+          echo "Checking iOS libffi availability..."
+          if [[ ! -f "$ios_libffi" ]]; then
+            echo "::error::iOS libffi.a not found at expected location: $ios_libffi"
+            exit 1
+          fi
+          echo "Verifying architecture..."
+          xcrun lipo -info "$ios_libffi"
+          echo "Checking for Homebrew contamination..."
+          if env | grep -E '^(LDFLAGS|CPPFLAGS|PKG_CONFIG_PATH)=' | grep -F '/opt/homebrew'; then
+            echo "::error::Homebrew target-library contamination detected in environment"
+            env | grep -E '^(LDFLAGS|CPPFLAGS|PKG_CONFIG_PATH)=' || true
+            exit 1
+          fi
+          echo "iOS libffi isolation verified"
+
+          python_package="$deps_build/packages/Python-3.13.13.tar.xz"
+          test -f "$python_package"
+
+          # CPython requires a build-machine interpreter matching the target version for
+          # freezing modules during a cross-build. The outer iOS deployment target is needed
+          # later by cibuildwheel for wheel tagging, but must never retarget this native
+          # build-machine interpreter to iPhoneOS.
+          mkdir -p "$host_python_src" "$host_python_prefix"
+          tar -xf "$python_package" -C "$host_python_src" --strip-components=1
+          (
+            cd "$host_python_src"
+            unset IPHONEOS_DEPLOYMENT_TARGET
+            test -z "${IPHONEOS_DEPLOYMENT_TARGET:-}"
+            ./configure \
+              --prefix="$host_python_prefix" \
+              --disable-test-modules \
+              2>&1 | tee "$GITHUB_WORKSPACE/python-host-configure.log"
+            make -j3 2>&1 | tee "$GITHUB_WORKSPACE/python-host-build.log"
+            make install 2>&1 | tee -a "$GITHUB_WORKSPACE/python-host-build.log"
+          )
+          "$host_python_prefix/bin/python3.13" -c \
+            'import sys; assert sys.version_info[:3] == (3, 13, 13), sys.version'
+
+          # CPython 3.13 requires --enable-framework for an iOS host. Keep supported
+          # stdlib extensions in that framework and also retain its side static archive for
+          # symbol-level verification. NumPy extensions link to the same framework at runtime.
+          mkdir -p "$ios_python_src" "$deps_build/Release/python"
+          tar -xf "$python_package" -C "$ios_python_src" --strip-components=1
+          (
+            cd "$ios_python_src"
+            export PATH="$ios_python_src/iOS/Resources/bin:/usr/bin:/bin:/usr/sbin:/sbin:/Library/Apple/usr/bin"
+            export IPHONEOS_DEPLOYMENT_TARGET=26.0
+            export MODULE_BUILDTYPE=static
+            export BZIP2_CFLAGS="-I$deps_build/Release/bzip2/include"
+            export BZIP2_LIBS="$deps_build/Release/bzip2/lib/libbz2.a"
+            export LIBFFI_CFLAGS="-I$deps_build/Release/ffi/include"
+            export LIBFFI_LIBS="$deps_build/Release/ffi/lib/libffi.a"
+            export LIBLZMA_CFLAGS="-I$deps_build/Release/lzma/include"
+            export LIBLZMA_LIBS="$deps_build/Release/lzma/lib/liblzma.a"
+            export LIBSQLITE3_CFLAGS="-I$deps_build/Release/sqlite/include"
+            export LIBSQLITE3_LIBS="$deps_build/Release/sqlite/lib/libsqlite3.a"
+            export ZLIB_CFLAGS="-I$deps_build/Release/zlib/include"
+            export ZLIB_LIBS="$deps_build/Release/zlib/lib/libz.a"
+            export LIBB2_CFLAGS="-I$deps_build/Release/libb2/include"
+            export LIBB2_LIBS="$deps_build/Release/libb2/lib/libb2.a"
+
+            ./configure \
+              --host=arm64-apple-ios26.0 \
+              --build=arm64-apple-darwin \
+              --with-build-python="$host_python_prefix/bin/python3.13" \
+              --enable-framework="$deps_build/Release/python" \
+              --with-static-libpython=yes \
+              --with-pkg-config=no \
+              --with-openssl="$deps_build/Release/ssl" \
+              --with-openssl-rpath=no \
+              --enable-loadable-sqlite-extensions \
+              --without-system-libmpdec \
+              --without-ensurepip \
+              --disable-test-modules \
+              2>&1 | tee "$GITHUB_WORKSPACE/python-ios-configure.log"
+
+            # CPython's unversioned Apple framework rule links libpython followed by
+            # $(LIBS), but omits its generated $(MODLIBS) set. Inject the complete set
+            # so bundled support archives (Expat, mpdecimal, HACL) and every external
+            # static stdlib dependency are retained in the framework. The single quotes
+            # deliberately leave the make-variable references for make to expand.
+            python_ios_framework_libs='$(MODLIBS) $(SYSLIBS) -ldl -lpthread'
+            make -j3 LIBS="$python_ios_framework_libs" \
+              2>&1 | tee "$GITHUB_WORKSPACE/python-ios-build.log"
+            make LIBS="$python_ios_framework_libs" install \
+              2>&1 | tee -a "$GITHUB_WORKSPACE/python-ios-build.log"
+          )
+
+          mkdir -p "$deps_build/Release/python/lib"
+          cp "$ios_python_src/libpython3.13.a" \
+            "$deps_build/Release/python/lib/libpython3.13.a"
+
+          python_framework="$deps_build/Release/python/Python.framework/Python"
+          python_static_archive="$deps_build/Release/python/lib/libpython3.13.a"
+          python_framework_build_log="$GITHUB_WORKSPACE/python-ios-framework-build.txt"
+          python_framework_symbols_log="$GITHUB_WORKSPACE/python-ios-framework-symbols.txt"
+          for required_file in \
+            "$python_framework" \
+            "$python_static_archive" \
+            "$deps_build/Release/python/include/python3.13/Python.h"
+          do
+            if [[ ! -f "$required_file" ]]; then
+              echo "::error::CPython install is missing required file: $required_file"
+              exit 1
+            fi
+          done
+          if [[ ! -d "$deps_build/Release/python/lib/python3.13" ]]; then
+            echo "::error::CPython install is missing its Python 3.13 standard library"
+            exit 1
+          fi
+          if ! xcrun vtool -show-build "$python_framework" > "$python_framework_build_log"; then
+            echo "::error::Unable to inspect the installed Python framework Mach-O"
+            exit 1
+          fi
+          if ! grep -F 'platform IOS' "$python_framework_build_log" >/dev/null; then
+            echo "::error::Installed Python framework is not an iOS Mach-O"
+            cat "$python_framework_build_log"
+            exit 1
+          fi
+          if ! nm -gU "$python_framework" > "$python_framework_symbols_log"; then
+            echo "::error::Unable to inspect exported Python framework symbols"
+            exit 1
+          fi
+          # nm adds a Mach-O prefix to CPython's leading-underscore C symbol.
+          for required_symbol in __PyArg_CheckPositional _PyInit__ctypes _PyInit__ssl _PyInit__sqlite3; do
+            if ! grep -E "[[:space:]]${required_symbol}$" \
+              "$python_framework_symbols_log" >/dev/null
+            then
+              echo "::error::Python.framework is missing required built-in module symbol: $required_symbol"
+              exit 1
+            fi
+          done
+          echo "Verified official iOS Python.framework and required built-in modules"
+
+          # Build a genuine CPython 3.13 iOS NumPy wheel. Accelerate provides optimized
+          # BLAS/LAPACK on Apple silicon without importing a macOS OpenBLAS binary. The
+          # resulting .so files are converted to iOS frameworks during app bundling.
+          numpy_package="$deps_build/packages/numpy-2.3.4.tar.gz"
+          test -f "$numpy_package"
+          mkdir -p "$numpy_src" "$numpy_wheelhouse"
+          tar -xf "$numpy_package" -C "$numpy_src" --strip-components=1
+
+          # NumPy 2.3.4 predates upstream's official iOS wheel support
+          # (numpy/numpy#28759, commit ec6b2b2626d0fc2b1505f3ffd7905862ebe605f4).
+          # Backport the iOS platform fixes, including correct Accelerate symbol
+          # mangling, arm64 long-double detection, .fwork loading, and test guards.
+          # The extracted source is nested below this Git worktree. Apply with an
+          # explicit worktree-relative prefix; otherwise `git apply` can report success
+          # while ignoring every patch path outside its inferred current-directory scope.
+          numpy_relative_src="${numpy_src#"$GITHUB_WORKSPACE"/}"
+          if [[ "$numpy_relative_src" == "$numpy_src" ]]; then
+            echo "::error::NumPy source is not below GITHUB_WORKSPACE: $numpy_src"
+            exit 1
+          fi
+          git -C "$GITHUB_WORKSPACE" apply --check \
+            --directory="$numpy_relative_src" \
+            "$GITHUB_WORKSPACE/patches/numpy-2.3.4-ios-support.diff"
+          git -C "$GITHUB_WORKSPACE" apply \
+            --directory="$numpy_relative_src" \
+            "$GITHUB_WORKSPACE/patches/numpy-2.3.4-ios-support.diff"
+          git -C "$GITHUB_WORKSPACE" apply --check \
+            --directory="$numpy_relative_src" \
+            "$GITHUB_WORKSPACE/patches/numpy-2.3.4-fwork-bundle-root.diff"
+          git -C "$GITHUB_WORKSPACE" apply \
+            --directory="$numpy_relative_src" \
+            "$GITHUB_WORKSPACE/patches/numpy-2.3.4-fwork-bundle-root.diff"
+          if ! grep -F '#include "TargetConditionals.h"' \
+            "$numpy_src/numpy/_core/src/common/npy_cblas.h" >/dev/null
+          then
+            echo "::error::NumPy iOS Accelerate backport was not applied to the extracted source"
+            exit 1
+          fi
+          if ! grep -F 'while not app_bundle.endswith(".app")' \
+            "$numpy_src/numpy/ctypeslib/_ctypeslib.py" >/dev/null
+          then
+            echo "::error::NumPy app-bundle .fwork resolver was not applied"
+            exit 1
+          fi
+          echo "Applied NumPy 2.3.4 iOS platform and app-bundle framework backports"
+
+          "$host_python_prefix/bin/python3.13" -m pip install \
+            --disable-pip-version-check \
+            "cibuildwheel==4.2.0"
+          (
+            cd "$numpy_src"
+            export CIBW_BUILD=cp313-ios_arm64_iphoneos
+            export CIBW_ARCHS=arm64_iphoneos
+            export CIBW_BEFORE_BUILD=""
+            export CIBW_BEFORE_TEST=""
+            export CIBW_TEST_COMMAND=""
+            export CIBW_XBUILD_TOOLS=ninja
+            export CIBW_BUILD_FRONTEND=build
+            export CIBW_ENVIRONMENT="RUNNER_OS=macOS RUNNER_ARCH=ARM64 INSTALL_OPENBLAS=false IPHONEOS_DEPLOYMENT_TARGET=26.0"
+            # Upstream's iOS wheel profile uses Accelerate ILP64 on iOS 16.4+.
+            # iPadOS 27 therefore gets the complete 64-bit BLAS/LAPACK interface.
+            export CIBW_CONFIG_SETTINGS="setup-args=-Duse-ilp64=true setup-args=-Dblas=accelerate setup-args=-Dlapack=accelerate setup-args=-Dallow-noblas=false build-dir=build-ios"
+            "$host_python_prefix/bin/python3.13" -m cibuildwheel \
+              --platform ios \
+              --config-file /dev/null \
+              --output-dir "$numpy_wheelhouse" \
+              . 2>&1 | tee "$GITHUB_WORKSPACE/numpy-ios-build.log"
+          )
+
+          numpy_wheel="$(find "$numpy_wheelhouse" -type f \
+            -name 'numpy-2.3.4-cp313-cp313-ios_26_0_arm64_iphoneos.whl' -print -quit)"
+          test -n "$numpy_wheel"
+          numpy_site_packages="$deps_build/Release/python/lib/python3.13/site-packages"
+          mkdir -p "$numpy_site_packages"
+          ditto -x -k "$numpy_wheel" "$numpy_site_packages"
+          test -f "$numpy_site_packages/numpy/_core/include/numpy/arrayobject.h"
+          test -n "$(find "$numpy_site_packages/numpy" -type f -name '*.so' -print -quit)"
+          numpy_linalg_extension="$(find "$numpy_site_packages/numpy/linalg" -type f \
+            -name '_umath_linalg*.so' -print -quit)"
+          test -n "$numpy_linalg_extension"
+          nm -u "$numpy_linalg_extension" | grep -F '$NEWLAPACK$ILP64' >/dev/null
+          if nm -u "$numpy_linalg_extension" | grep -F '$NEWLAPACK_' >/dev/null; then
+            echo "NumPy retained the invalid iOS Fortran underscore after the Accelerate suffix" >&2
+            exit 1
+          fi
+          otool -L "$numpy_linalg_extension" | \
+            grep -F 'Accelerate.framework/Accelerate' >/dev/null
+          while IFS= read -r numpy_extension; do
+            xcrun vtool -show-build "$numpy_extension" | grep -F 'platform IOS' >/dev/null
+            otool -L "$numpy_extension" | grep -F '@rpath/Python.framework/Python' >/dev/null
+            # `otool -L` prints the inspected file path as its first line. Exclude that
+            # header so the checkout's /Users/runner path is not mistaken for a linked
+            # host dependency; every actual dependency line remains under inspection.
+            if otool -L "$numpy_extension" | sed -n '2,$p' | \
+              grep -E '/opt/homebrew|/Users/runner|MacOSX\.sdk' >/dev/null
+            then
+              echo "NumPy extension contains a host-only dependency: $numpy_extension" >&2
+              otool -L "$numpy_extension" >&2
+              exit 1
+            fi
+          done < <(find "$numpy_site_packages/numpy" -type f -name '*.so' -print)
+
+          # Python zstandard is required for Python code that reads compressed .blend data.
+          # Build it for iOS rather than letting Blender force the feature off.
+          zstandard_package="$deps_build/packages/zstandard-0.25.0.tar.gz"
+          test -f "$zstandard_package"
+          mkdir -p "$zstandard_src" "$zstandard_wheelhouse"
+          tar -xf "$zstandard_package" -C "$zstandard_src" --strip-components=1
+          (
+            cd "$zstandard_src"
+            export CIBW_BUILD=cp313-ios_arm64_iphoneos
+            export CIBW_ARCHS=arm64_iphoneos
+            export CIBW_BEFORE_BUILD=""
+            export CIBW_BEFORE_TEST=""
+            export CIBW_TEST_COMMAND=""
+            export CIBW_XBUILD_TOOLS=""
+            export CIBW_ENVIRONMENT="IPHONEOS_DEPLOYMENT_TARGET=26.0"
+            # zstandard 0.25.0's release config enables cibuildwheel's former
+            # `cpython-freethreading` group. cibuildwheel 4 removed that group, and it
+            # is unrelated to this pinned, GIL-enabled CPython 3.13 iOS wheel. Isolate
+            # the build from release-matrix settings while retaining our explicit iOS
+            # architecture, environment, and no-test policy above.
+            "$host_python_prefix/bin/python3.13" -m cibuildwheel \
+              --platform ios \
+              --config-file /dev/null \
+              --output-dir "$zstandard_wheelhouse" \
+              . 2>&1 | tee "$GITHUB_WORKSPACE/zstandard-ios-build.log"
+          )
+          zstandard_wheel="$(find "$zstandard_wheelhouse" -type f \
+            -name 'zstandard-0.25.0-cp313-cp313-ios_26_0_arm64_iphoneos.whl' -print -quit)"
+          test -n "$zstandard_wheel"
+          ditto -x -k "$zstandard_wheel" "$numpy_site_packages"
+
+          # Restore Blender's pinned pure-Python network and certificate stack for bl_pkg.
+          "$host_python_prefix/bin/python3.13" -m pip install \
+            --disable-pip-version-check \
+            --only-binary=:all: \
+            --platform any \
+            --abi none \
+            --python-version 3.13 \
+            --no-compile \
+            --no-deps \
+            --target "$numpy_site_packages" \
+            "idna==3.10" \
+            "charset-normalizer==3.4.1" \
+            "urllib3==2.4.0" \
+            "certifi==2025.4.26" \
+            "requests==2.32.3"
+
+          test -f "$numpy_site_packages/requests/__init__.py"
+          test -f "$numpy_site_packages/certifi/cacert.pem"
+          test -n "$(find "$numpy_site_packages/zstandard" -type f -name '*.so' -print -quit)"
+          while IFS= read -r python_extension; do
+            xcrun vtool -show-build "$python_extension" | grep -F 'platform IOS' >/dev/null
+            otool -L "$python_extension" | grep -F '@rpath/Python.framework/Python' >/dev/null
+          done < <(find "$numpy_site_packages" -type f -name '*.so' -print)
+
+          for dependency in \
+            python \
+            ssl \
+            ffi \
+            sqlite \
+            zlib \
+            bzip2 \
+            lzma \
+            libb2 \
+            draco \
+            meshoptimizer
+          do
+            test -d "$deps_build/Release/$dependency"
+            rsync -a --delete \
+              "$deps_build/Release/$dependency/" \
+              "$SOURCE_DIR/lib/ios_arm64/$dependency/"
+          done
+
+      # The bootstrap build and its internal Python, NumPy, zstandard, and requests
+      # assertions have passed by this point. Save the expensive bundle before aggregate
+      # verification so a diagnostic-only failure does not discard ten minutes of valid work.
+      - name: Save completed dependency bootstrap cache
+        if: steps.ios-bootstrap-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            work/host-python-3.13.13
+            work/blender/lib/ios_arm64/python
+            work/blender/lib/ios_arm64/ssl
+            work/blender/lib/ios_arm64/ffi
+            work/blender/lib/ios_arm64/sqlite
+            work/blender/lib/ios_arm64/zlib
+            work/blender/lib/ios_arm64/bzip2
+            work/blender/lib/ios_arm64/lzma
+            work/blender/lib/ios_arm64/libb2
+            work/blender/lib/ios_arm64/draco
+            work/blender/lib/ios_arm64/meshoptimizer
+          key: ios-5.2-bootstrap-${{ runner.os }}-xcode-26.3-${{ env.BLENDER_REF }}-python-3.13.13-numpy-2.3.4-draco-meshopt-static-v6
+
+      - name: Verify complete iOS dependency layout
+        run: |
+          set -euo pipefail
+          exec > >(tee "$GITHUB_WORKSPACE/ios-dependency-verification.log") 2>&1
+
+          require_file() {
+            local path="$1"
+            if [[ ! -f "$path" ]]; then
+              echo "::error::Missing required file: $path"
+              return 1
+            fi
+            echo "Verified file: $path"
+          }
+
+          require_executable() {
+            local path="$1"
+            if [[ ! -x "$path" ]]; then
+              echo "::error::Missing required executable: $path"
+              return 1
+            fi
+            echo "Verified executable: $path"
+          }
+
+          require_dir() {
+            local path="$1"
+            if [[ ! -d "$path" ]]; then
+              echo "::error::Missing required directory: $path"
+              return 1
+            fi
+            echo "Verified directory: $path"
+          }
+
+          require_absent_file() {
+            local path="$1"
+            if [[ -f "$path" ]]; then
+              echo "::error::Forbidden stale file is present: $path"
+              return 1
+            fi
+            echo "Verified absent file: $path"
+          }
+
+          require_nonempty() {
+            local label="$1"
+            local value="$2"
+            if [[ -z "$value" ]]; then
+              echo "::error::$label was not found"
+              return 1
+            fi
+            echo "Verified $label: $value"
+          }
+
+          require_find() {
+            local root="$1"
+            local pattern="$2"
+            local label="$3"
+            local match
+            match="$(find "$root" -iname "$pattern" -print -quit)"
+            if [[ -z "$match" ]]; then
+              echo "::error::$label not found below $root (case-insensitive pattern: $pattern)"
+              echo "Files available below $root:"
+              find "$root" -maxdepth 6 -type f -print | sort
+              return 1
+            fi
+            echo "Verified $label: $match"
+          }
+
+          host_python="$GITHUB_WORKSPACE/work/host-python-3.13.13/bin/python3.13"
+          python_root="$SOURCE_DIR/lib/ios_arm64/python"
+          python_site_packages="$python_root/lib/python3.13/site-packages"
+          require_executable "$host_python"
+          "$host_python" -c \
+            'import sys; assert sys.version_info[:3] == (3, 13, 13), sys.version'
+
+          for required_file in \
+            "$python_root/include/python3.13/Python.h" \
+            "$python_root/include/python3.13/pyconfig.h" \
+            "$python_root/lib/libpython3.13.a" \
+            "$python_root/Python.framework/Python" \
+            "$python_site_packages/numpy/_core/include/numpy/arrayobject.h" \
+            "$python_site_packages/requests/__init__.py" \
+            "$python_site_packages/certifi/cacert.pem" \
+            "$SOURCE_DIR/lib/ios_arm64/ssl/lib/libssl.a" \
+            "$SOURCE_DIR/lib/ios_arm64/ssl/lib/libcrypto.a" \
+            "$SOURCE_DIR/lib/ios_arm64/ffi/lib/libffi.a" \
+            "$SOURCE_DIR/lib/ios_arm64/sqlite/lib/libsqlite3.a" \
+            "$SOURCE_DIR/lib/ios_arm64/zlib/lib/libz.a" \
+            "$SOURCE_DIR/lib/ios_arm64/bzip2/lib/libbz2.a" \
+            "$SOURCE_DIR/lib/ios_arm64/lzma/lib/liblzma.a" \
+            "$SOURCE_DIR/lib/ios_arm64/libb2/lib/libb2.a" \
+            "$SOURCE_DIR/lib/ios_arm64/usd/include/pxr/pxr.h" \
+            "$SOURCE_DIR/lib/ios_arm64/usd/lib/libusd_ms.dylib"
+          do
+            require_file "$required_file"
+          done
+          require_dir "$python_root/lib/python3.13"
+          require_absent_file "$python_root/lib/libpython3.11.a"
+
+          usd_version_header="$SOURCE_DIR/lib/ios_arm64/usd/include/pxr/pxr.h"
+          usd_version_log="$GITHUB_WORKSPACE/usd-ios-version.txt"
+          usd_version="$(awk '/^#define PXR_VERSION / {print $3; exit}' "$usd_version_header")"
+          require_nonempty "OpenUSD PXR_VERSION" "$usd_version"
+          if [[ ! "$usd_version" =~ ^[0-9]+$ ]]; then
+            echo "::error::Invalid PXR_VERSION in $usd_version_header: $usd_version"
+            exit 1
+          fi
+          {
+            printf 'PXR_VERSION=%s\n' "$usd_version"
+            if (( usd_version < 2505 )); then
+              echo "UsdUIAccessibilityAPI unavailable; Blender compatibility guards are active."
+            else
+              echo "UsdUIAccessibilityAPI expected from this OpenUSD version."
+            fi
+          } | tee "$usd_version_log"
+          if (( usd_version >= 2505 )); then
+            require_file "$SOURCE_DIR/lib/ios_arm64/usd/include/pxr/usd/usdUI/accessibilityAPI.h"
+          fi
+
+          python_linkage_audit="$GITHUB_WORKSPACE/ios-python-linkage-audit.txt"
+          : > "$python_linkage_audit"
+          python_311_linkage_found=0
+          python_linkage_found=0
+          while IFS= read -r -d '' candidate; do
+            path_is_python_311=0
+            if grep -Eiq 'python3[.]11|cpython-311' <<< "$candidate"; then
+              path_is_python_311=1
+            fi
+
+            python_loads="$(
+              otool -L "$candidate" 2>/dev/null | sed -n '2,$p' | \
+                grep -i 'python' || true
+            )"
+            if [[ -z "$python_loads" && "$path_is_python_311" -eq 0 ]]; then
+              continue
+            fi
+
+            python_linkage_found=1
+            {
+              printf 'Binary: %s\n' "$candidate"
+              if [[ -n "$python_loads" ]]; then
+                printf '%s\n' "$python_loads"
+              else
+                printf '%s\n' '(filename identifies a CPython 3.11 extension)'
+              fi
+              printf '\n'
+            } | tee -a "$python_linkage_audit"
+
+            if [[ "$path_is_python_311" -ne 0 ]] || \
+              grep -Eiq 'python3[.]11|Python[.]framework/Versions/3[.]11|cpython-311' \
+                <<< "$python_loads"
+            then
+              python_311_linkage_found=1
+            fi
+          done < <(
+            find "$SOURCE_DIR/lib/ios_arm64" \
+              \( -type f -o -type l \) \
+              \( -name '*.dylib' -o -name '*.dylib.*' -o -name '*.so' \) \
+              -print0
+          )
+          if [[ "$python_linkage_found" -eq 0 ]]; then
+            echo "No Python load commands or CPython-tagged extensions found in inherited iOS shared binaries." | \
+              tee -a "$python_linkage_audit"
+          fi
+          if [[ "$python_311_linkage_found" -ne 0 ]]; then
+            echo "::error::Inherited iOS shared binaries reference Python 3.11; see $python_linkage_audit"
+            exit 1
+          fi
+          echo "Verified no inherited iOS shared binary references Python 3.11"
+
+          numpy_extension="$(find "$python_site_packages/numpy" -type f -name '*.so' -print -quit)"
+          zstandard_extension="$(find "$python_site_packages/zstandard" -type f -name '*.so' -print -quit)"
+          require_nonempty "NumPy iOS extension" "$numpy_extension"
+          require_nonempty "zstandard iOS extension" "$zstandard_extension"
+
+          # Draco installs draco-config.cmake while meshoptimizer installs
+          # meshoptimizerConfig.cmake. Both iOS codec dependencies must now be static;
+          # the loadable runtime boundary is their Blender bridge framework.
+          require_find "$SOURCE_DIR/lib/ios_arm64/draco" '*config.cmake' \
+            "Draco CMake package config"
+          require_find "$SOURCE_DIR/lib/ios_arm64/meshoptimizer" '*config.cmake' \
+            "meshoptimizer CMake package config"
+
+          draco_archive="$(find "$SOURCE_DIR/lib/ios_arm64/draco/lib" -type f \
+            -name '*.a' -print -quit)"
+          meshoptimizer_archive="$(find "$SOURCE_DIR/lib/ios_arm64/meshoptimizer/lib" -type f \
+            -name '*meshoptimizer*.a' -print -quit)"
+          require_nonempty "Draco static library" "$draco_archive"
+          require_nonempty "meshoptimizer static library" "$meshoptimizer_archive"
+
+          codec_dylib="$(find \
+            "$SOURCE_DIR/lib/ios_arm64/draco/lib" \
+            "$SOURCE_DIR/lib/ios_arm64/meshoptimizer/lib" \
+            -type f \( -name '*.dylib' -o -name '*.dylib.*' \) -print -quit)"
+          if [[ -n "$codec_dylib" ]]; then
+            echo "::error::Codec bootstrap unexpectedly contains a shared library: $codec_dylib"
+            exit 1
+          fi
+          echo "Verified Draco and meshoptimizer bootstrap outputs are static archives"
+
+          file "$draco_archive" "$meshoptimizer_archive"
+          xcrun lipo -info "$draco_archive" | grep -F arm64 >/dev/null
+          xcrun lipo -info "$meshoptimizer_archive" | grep -F arm64 >/dev/null
+
+          file "$python_root/lib/libpython3.13.a"
+          python_framework="$python_root/Python.framework/Python"
+          python_framework_build_log="$GITHUB_WORKSPACE/python-ios-framework-build.txt"
+          python_framework_symbols_log="$GITHUB_WORKSPACE/python-ios-framework-symbols.txt"
+          xcrun vtool -show-build "$python_framework" > "$python_framework_build_log"
+          grep -F 'platform IOS' "$python_framework_build_log" >/dev/null
+          nm -gU "$python_framework" > "$python_framework_symbols_log"
+          # nm adds a Mach-O prefix to CPython's leading-underscore C symbol.
+          for required_symbol in __PyArg_CheckPositional _PyInit__ctypes _PyInit__ssl _PyInit__sqlite3; do
+            if ! grep -E "[[:space:]]${required_symbol}$" \
+              "$python_framework_symbols_log" >/dev/null
+            then
+              echo "::error::Python.framework is missing required built-in module symbol: $required_symbol"
+              exit 1
+            fi
+            echo "Verified Python.framework symbol: $required_symbol"
+          done
+
+          while IFS= read -r python_extension; do
+            echo "Verifying iOS Python extension: $python_extension"
+            xcrun vtool -show-build "$python_extension" | grep -F 'platform IOS' >/dev/null
+            otool -L "$python_extension" | grep -F '@rpath/Python.framework/Python' >/dev/null
+          done < <(find "$python_site_packages/numpy" "$python_site_packages/zstandard" \
+            -type f -name '*.so' -print)
+
+          while IFS= read -r dependency_dylib; do
+            echo "Verifying inherited iOS USD dylib: $dependency_dylib"
+            xcrun vtool -show-build "$dependency_dylib" | grep -F 'platform IOS' >/dev/null
+            if otool -L "$dependency_dylib" | sed -n '2,$p' | \
+              grep -E '/opt/homebrew|/Users/runner|MacOSX\.sdk' >/dev/null
+            then
+              echo "::error::iOS dependency contains a host-only linkage: $dependency_dylib"
+              otool -L "$dependency_dylib"
+              exit 1
+            fi
+          done < <(find "$SOURCE_DIR/lib/ios_arm64/usd/lib" \
+            -type f \( -name '*.dylib' -o -name '*.dylib.*' \) -print)
+
+          echo "Discovered static codec archives and USD libraries:"
+          find \
+            "$SOURCE_DIR/lib/ios_arm64/draco/lib" \
+            "$SOURCE_DIR/lib/ios_arm64/meshoptimizer/lib" \
+            "$SOURCE_DIR/lib/ios_arm64/usd/lib" \
+            -type f \( -name '*.a' -o -name '*.dylib' -o -name '*.dylib.*' \) -print | sort
+
+          nm -gU "$SOURCE_DIR/lib/ios_arm64/ssl/lib/libcrypto.a" | \
+            grep -E '[[:space:]]_EVP_MD_CTX_get_size_ex$' >/dev/null
+          nm -gU "$SOURCE_DIR/lib/ios_arm64/ssl/lib/libssl.a" | \
+            grep -E '[[:space:]]_SSL_SESSION_get_time_ex$' >/dev/null
+          nm -gU "$SOURCE_DIR/lib/ios_arm64/ssl/lib/libcrypto.a" | \
+            grep -E '[[:space:]]_X509_STORE_get1_objects$' >/dev/null
+          nm -gU "$SOURCE_DIR/lib/ios_arm64/ffi/lib/libffi.a" | \
+            grep -E '[[:space:]]_ffi_type_longdouble$' >/dev/null
+          echo "Verified required OpenSSL and libffi symbols"
+
+      - name: Configure full Blender 5.2 iPad profile
+        run: |
+          set -o pipefail
+          ios_sdk_root="$(xcrun --sdk iphoneos --show-sdk-path)"
+          ios_dev_root="$(dirname "$ios_sdk_root")"
+
           cmake -G Xcode \
             -S "$SOURCE_DIR" \
             -B "$BUILD_DIR" \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DWITH_APPLE_CROSSPLATFORM=ON \
             -DAPPLE_TARGET_DEVICE=ios \
+            -DCMAKE_FIND_ROOT_PATH="$ios_dev_root;$(dirname "$ios_dev_root");$SOURCE_DIR/lib/ios_arm64" \
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=18.0 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0 \
+            -DCMAKE_XCODE_ATTRIBUTE_IPHONEOS_DEPLOYMENT_TARGET=26.0 \
+            -DCMAKE_XCODE_ATTRIBUTE_FRAMEWORK_SEARCH_PATHS="$SOURCE_DIR/lib/ios_arm64/python" \
+            -DCMAKE_XCODE_ATTRIBUTE_LD_RUNPATH_SEARCH_PATHS='$(inherited) @executable_path/Frameworks @loader_path/Assets/lib' \
             -DCMAKE_XCODE_GENERATE_SCHEME=ON \
             -DCMAKE_BUILD_TYPE=Release \
+            -DBLENDER_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
             -DCMAKE_XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
-            -DBLENDER_IOS_SKIP_INSTALL_CODESIGN=ON \
-            -DWITH_CYCLES=OFF \
-            -DWITH_FFMPEG=OFF \
-            -DWITH_ALEMBIC=OFF \
-            -DWITH_OPENVDB=OFF \
-            -DWITH_OPENIMAGEDENOISE=OFF \
-            -DWITH_USD=OFF \
-            -DWITH_HYDRA=OFF \
+            -DPYTHON_VERSION=3.13 \
+            -DPYTHON_EXECUTABLE="$GITHUB_WORKSPACE/work/host-python-3.13.13/bin/python3.13" \
+            -DPYTHON_INCLUDE_DIR="$SOURCE_DIR/lib/ios_arm64/python/include/python3.13" \
+            -DPYTHON_INCLUDE_CONFIG_DIR="$SOURCE_DIR/lib/ios_arm64/python/include/python3.13" \
+            -DPYTHON_LIBRARY="$SOURCE_DIR/lib/ios_arm64/python/Python.framework/Python" \
+            -DPYTHON_LIBPATH="$SOURCE_DIR/lib/ios_arm64/python/lib" \
+            -DWITH_PYTHON=ON \
+            -DWITH_PYTHON_NUMPY=ON \
+            -DWITH_PYTHON_INSTALL_NUMPY=ON \
+            -DWITH_PYTHON_INSTALL_ZSTANDARD=ON \
+            -DPYTHON_NUMPY_PATH="$SOURCE_DIR/lib/ios_arm64/python/lib/python3.13/site-packages" \
+            -DPYTHON_NUMPY_INCLUDE_DIRS="$SOURCE_DIR/lib/ios_arm64/python/lib/python3.13/site-packages/numpy/_core/include" \
+            -DWITH_CYCLES=ON \
+            -DWITH_CYCLES_DEVICE_METAL=ON \
+            -DWITH_CYCLES_EMBREE=ON \
+            -DWITH_CYCLES_PATH_GUIDING=ON \
+            -DWITH_CODEC_FFMPEG=ON \
+            -DWITH_ALEMBIC=ON \
+            -DWITH_OPENVDB=ON \
+            -DWITH_OPENIMAGEDENOISE=ON \
+            -DWITH_USD=ON \
+            -DWITH_AUDASPACE=ON \
+            -DWITH_COREAUDIO=OFF \
+            -DWITH_OPENAL=ON \
+            -DWITH_CODEC_SNDFILE=ON \
+            -DWITH_DRACO=ON \
+            -DWITH_MESHOPTIMIZER=ON \
+            -DWITH_OPENSUBDIV=ON \
             -DWITH_INTERNATIONAL=ON \
+            -DWITH_HYDRA=OFF \
             -DWITH_XR_OPENXR=OFF \
-            -DWITH_OPENSUBDIV=ON
+            2>&1 | tee "$GITHUB_WORKSPACE/cmake-configure.log"
+
+          grep -Fx 'WITH_USD:BOOL=ON' "$BUILD_DIR/CMakeCache.txt" >/dev/null
+          grep -Fx 'WITH_HYDRA:BOOL=OFF' "$BUILD_DIR/CMakeCache.txt" >/dev/null
+          grep -Fx 'WITH_OPENAL:BOOL=ON' "$BUILD_DIR/CMakeCache.txt" >/dev/null
+          grep -F -- '-DWITH_OPENAL=OFF' "$GITHUB_WORKSPACE/cmake-configure.log" >/dev/null
+          echo "Verified OpenAL is enabled for the iOS app and disabled only for host tools"
 
           xcodebuild -project "$BUILD_DIR/Blender.xcodeproj" -list
+          bash ./scripts/write-feature-manifest.sh \
+            "$BUILD_DIR/CMakeCache.txt" \
+            "$ARTIFACT_DIR/Blender-iPad-M4-5.2-feature-manifest.txt"
 
-      - name: Build and install unsigned device application
+          {
+            echo "Blender source: $BLENDER_REF"
+            echo "iOS libraries: $(git -C "$SOURCE_DIR/lib/ios_arm64" rev-parse HEAD)"
+            echo "macOS libraries: $(git -C "$SOURCE_DIR/lib/macos_arm64" rev-parse HEAD)"
+            echo "Compatibility patch: $(shasum -a 256 patches/ios-5.2-m4-full.patch | awk '{print $1}')"
+            echo "Live-view geometry patch: $(shasum -a 256 patches/ios-live-view-geometry.patch | awk '{print $1}')"
+            echo "Native Files patch: $(shasum -a 256 patches/ios-native-files.patch | awk '{print $1}')"
+            echo "Runtime linkage patch: $(shasum -a 256 patches/ios-runtime-linkage.patch | awk '{print $1}')"
+            echo "Files lifecycle patch: $(shasum -a 256 patches/ios-files-lifecycle-v2.patch | awk '{print $1}')"
+            echo "Codec framework patch: $(shasum -a 256 patches/ios-codec-frameworks.patch | awk '{print $1}')"
+            echo "NumPy iOS patch: $(shasum -a 256 patches/numpy-2.3.4-ios-support.diff | awk '{print $1}')"
+            echo "NumPy fwork patch: $(shasum -a 256 patches/numpy-2.3.4-fwork-bundle-root.diff | awk '{print $1}')"
+            echo "Harness commit: $GITHUB_SHA"
+          } > "$ARTIFACT_DIR/Blender-iPad-M4-5.2-source-manifest.txt"
+
+      - name: Build complete unsigned device application
         run: |
           set -o pipefail
           xcodebuild \
             -project "$BUILD_DIR/Blender.xcodeproj" \
-            -target install \
+            -scheme blender \
             -configuration Release \
             -sdk iphoneos \
             -jobs 3 \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY= \
+            EXPANDED_CODE_SIGN_IDENTITY=- \
+            COMPILER_INDEX_STORE_ENABLE=NO \
             build 2>&1 | tee "$GITHUB_WORKSPACE/xcodebuild.log"
 
-      - name: Package unsigned IPA
+      - name: Embed and verify Python.framework
+        run: bash ./scripts/verify-app-linkage.sh "$BUILD_DIR" "$SOURCE_DIR"
+
+      - name: Package full-memory and Signulous fallback IPAs
         run: |
+          cp "$SOURCE_DIR/release/ios/entitlements.plist" \
+            "$ARTIFACT_DIR/Blender-iPad-M4-5.2-full-memory-entitlements.plist"
+
           bash ./scripts/package-ipa.sh \
             "$BUILD_DIR" \
-            "$ARTIFACT_DIR/Blender-iPad-M4-unsigned.ipa"
+            "$ARTIFACT_DIR/Blender-iPad-M4-5.2-full-memory-unsigned.ipa" \
+            full-memory
 
-      - name: Upload unsigned IPA
+          bash ./scripts/package-ipa.sh \
+            "$BUILD_DIR" \
+            "$ARTIFACT_DIR/Blender-iPad-M4-5.2-Signulous-unsigned.ipa" \
+            signulous
+
+      - name: Upload unsigned Blender 5.2 build
         uses: actions/upload-artifact@v4
         with:
-          name: Blender-iPad-M4-unsigned
-          path: artifacts/Blender-iPad-M4-unsigned.ipa
+          name: Blender-iPad-M4-5.2-full
+          path: artifacts/**
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 21
 
-      - name: Upload diagnostics
+      - name: Upload build diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Blender-iPad-M4-build-diagnostics
+          name: Blender-iPad-M4-5.2-build-diagnostics
           path: |
+            bootstrap-configure.log
+            bootstrap-build.log
+            python-host-configure.log
+            python-host-build.log
+            python-ios-configure.log
+            python-ios-build.log
+            python-ios-framework-build.txt
+            python-ios-framework-symbols.txt
+            numpy-ios-build.log
+            zstandard-ios-build.log
+            ios-dependency-verification.log
+            ios-python-linkage-audit.txt
+            usd-ios-version.txt
+            work/python-host-3.13.13/config.log
+            work/python-ios-3.13.13/config.log
+            work/deps-ios-bootstrap/build/*/src/*/config.log
+            cmake-configure.log
             xcodebuild.log
             work/build-ios/CMakeCache.txt
             work/build-ios/CMakeFiles/CMakeOutput.log
             work/build-ios/CMakeFiles/CMakeError.log
+            artifacts/*manifest.txt
           if-no-files-found: ignore
-          retention-days: 14
+          retention-days: 21

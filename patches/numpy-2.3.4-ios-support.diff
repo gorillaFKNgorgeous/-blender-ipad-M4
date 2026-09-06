@@ -1,0 +1,339 @@
+diff --git a/numpy/_core/meson.build b/numpy/_core/meson.build
+index 79713e71a..be2455a4c 100644
+--- a/numpy/_core/meson.build
++++ b/numpy/_core/meson.build
+@@ -438,7 +438,17 @@ endforeach
+ # as well as https://github.com/mesonbuild/meson/issues/11068
+ longdouble_format = meson.get_external_property('longdouble_format', 'UNKNOWN')
+ if longdouble_format == 'UNKNOWN'
+-  longdouble_format = meson.get_compiler('c').run(
++  if host_machine.system() == 'ios'
++    if host_machine.cpu_family() == 'x86_64'
++      # The x86_64 iOS simulator follows the System V AMD64 ABI, where long
++      # double is the 80-bit x87 format stored in 16 bytes.
++      longdouble_format = 'INTEL_EXTENDED_16_BYTES_LE'
++    else
++      # On arm64 iOS, long double is identical to double.
++      longdouble_format = 'IEEE_DOUBLE_LE'
++    endif
++  else
++    longdouble_format = meson.get_compiler('c').run(
+ '''
+ #include <stdio.h>
+ #include <string.h>
+@@ -517,7 +527,8 @@ int main(void) {
+   }
+   }
+ }
+-  ''').stdout()
++    ''').stdout()
++  endif
+ endif
+ if longdouble_format == 'UNKNOWN' or longdouble_format == 'UNDEFINED'
+   error('Unknown long double format of size: ' + cc.sizeof('long double').to_string())
+diff --git a/numpy/_core/src/common/npy_cblas.h b/numpy/_core/src/common/npy_cblas.h
+index 596a7c68c..195f8c2ed 100644
+--- a/numpy/_core/src/common/npy_cblas.h
++++ b/numpy/_core/src/common/npy_cblas.h
+@@ -26,10 +26,15 @@ enum CBLAS_SIDE {CblasLeft=141, CblasRight=142};
+ #define CBLAS_INDEX size_t  /* this may vary between platforms */
+ 
+ #ifdef ACCELERATE_NEW_LAPACK
+-    #if __MAC_OS_X_VERSION_MAX_ALLOWED < 130300
++    #include "TargetConditionals.h"
++    #if TARGET_OS_OSX && __MAC_OS_X_VERSION_MAX_ALLOWED < 130300
+         #ifdef HAVE_BLAS_ILP64
+             #error "Accelerate ILP64 support is only available with macOS 13.3 SDK or later"
+         #endif
++    #elif TARGET_OS_IOS && __IPHONE_OS_VERSION_MAX_ALLOWED < 160400
++        #ifdef HAVE_BLAS_ILP64
++            #error "Accelerate ILP64 support is only available with iOS 16.4 SDK or later"
++        #endif
+     #else
+         #define NO_APPEND_FORTRAN
+         #ifdef HAVE_BLAS_ILP64
+diff --git a/numpy/_core/tests/test_array_interface.py b/numpy/_core/tests/test_array_interface.py
+index afb19f4e2..c26132709 100644
+--- a/numpy/_core/tests/test_array_interface.py
++++ b/numpy/_core/tests/test_array_interface.py
+@@ -4,7 +4,7 @@
+ import pytest
+ 
+ import numpy as np
+-from numpy.testing import IS_EDITABLE, IS_WASM, extbuild
++from numpy.testing import HAS_SUBPROCESSES, IS_EDITABLE, extbuild
+ 
+ 
+ @pytest.fixture
+@@ -14,8 +14,8 @@ def get_module(tmp_path):
+     """
+     if sys.platform.startswith('cygwin'):
+         pytest.skip('link fails on cygwin')
+-    if IS_WASM:
+-        pytest.skip("Can't build module inside Wasm")
++    if not HAS_SUBPROCESSES:
++        pytest.skip("Can't build module unless platform supports subprocesses")
+     if IS_EDITABLE:
+         pytest.skip("Can't build module for editable install")
+ 
+diff --git a/numpy/_core/tests/test_cython.py b/numpy/_core/tests/test_cython.py
+index fb3839fd2..f882337e1 100644
+--- a/numpy/_core/tests/test_cython.py
++++ b/numpy/_core/tests/test_cython.py
+@@ -7,7 +7,7 @@
+ import pytest
+ 
+ import numpy as np
+-from numpy.testing import IS_EDITABLE, IS_WASM, assert_array_equal
++from numpy.testing import HAS_SUBPROCESSES, IS_EDITABLE, assert_array_equal
+ 
+ # This import is copied from random.tests.test_extending
+ try:
+@@ -37,8 +37,8 @@
+ @pytest.fixture(scope='module')
+ def install_temp(tmpdir_factory):
+     # Based in part on test_cython from random.tests.test_extending
+-    if IS_WASM:
+-        pytest.skip("No subprocess")
++    if not HAS_SUBPROCESSES:
++        pytest.skip("platform cannot start subprocesses")
+ 
+     srcdir = os.path.join(os.path.dirname(__file__), 'examples', 'cython')
+     build_dir = tmpdir_factory.mktemp("cython_test") / "build"
+diff --git a/numpy/_core/tests/test_umath.py b/numpy/_core/tests/test_umath.py
+index 8eac23641..e1bc73c57 100644
+--- a/numpy/_core/tests/test_umath.py
++++ b/numpy/_core/tests/test_umath.py
+@@ -791,7 +791,7 @@ def test_float_remainder_roundoff(self):
+                         assert_(b > rem >= 0, msg)
+ 
+     @pytest.mark.skipif(IS_WASM, reason="fp errors don't work in wasm")
+-    @pytest.mark.xfail(sys.platform.startswith("darwin"),
++    @pytest.mark.xfail(sys.platform in {"darwin", "ios"},
+             reason="MacOS seems to not give the correct 'invalid' warning for "
+                    "`fmod`.  Hopefully, others always do.")
+     @pytest.mark.parametrize('dtype', np.typecodes['Float'])
+@@ -820,7 +820,7 @@ def test_float_divmod_errors(self, dtype):
+     @pytest.mark.skipif(hasattr(np.__config__, "blas_ssl2_info"),
+             reason="gh-22982")
+     @pytest.mark.skipif(IS_WASM, reason="fp errors don't work in wasm")
+-    @pytest.mark.xfail(sys.platform.startswith("darwin"),
++    @pytest.mark.xfail(sys.platform in {"darwin", "ios"},
+            reason="MacOS seems to not give the correct 'invalid' warning for "
+                   "`fmod`.  Hopefully, others always do.")
+     @pytest.mark.parametrize('dtype', np.typecodes['Float'])
+@@ -1560,7 +1560,7 @@ def test_sincos_values(self, dtype):
+ 
+     @pytest.mark.skipif(IS_WASM, reason="fp errors don't work in wasm")
+     @pytest.mark.xfail(
+-        sys.platform.startswith("darwin"),
++        sys.platform in {"darwin", "ios"},
+         reason="underflow is triggered for scalar 'sin'"
+     )
+     def test_sincos_underflow(self):
+diff --git a/numpy/_pyinstaller/tests/__init__.py b/numpy/_pyinstaller/tests/__init__.py
+index 4ed8fdd53..30053e24a 100644
+--- a/numpy/_pyinstaller/tests/__init__.py
++++ b/numpy/_pyinstaller/tests/__init__.py
+@@ -1,10 +1,10 @@
+ import pytest
+ 
+-from numpy.testing import IS_EDITABLE, IS_WASM
++from numpy.testing import IS_EDITABLE, IS_IOS, IS_WASM
+ 
+-if IS_WASM:
++if IS_WASM or IS_IOS:
+     pytest.skip(
+-        "WASM/Pyodide does not use or support Fortran",
++        "Platform does not use or support Fortran",
+         allow_module_level=True
+     )
+ 
+diff --git a/numpy/ctypeslib/_ctypeslib.py b/numpy/ctypeslib/_ctypeslib.py
+index 9255603cd..c49ce8834 100644
+--- a/numpy/ctypeslib/_ctypeslib.py
++++ b/numpy/ctypeslib/_ctypeslib.py
+@@ -53,6 +53,7 @@
+            'as_ctypes_type']
+ 
+ import os
++import sys
+ 
+ import numpy as np
+ import numpy._core.multiarray as mu
+@@ -129,8 +130,18 @@ def load_library(libname, loader_path):
+         loader_path = os.fsdecode(loader_path)
+ 
+         ext = os.path.splitext(libname)[1]
+-        if not ext:
+-            import sys
++        if sys.platform == "ios" and loader_path.endswith(".fwork"):
++            # iOS requires dynamic libraries to be delivered as frameworks;
++            # CPython uses .fwork files to point to their bundled location.
++            with open(loader_path) as f:
++                loader_path = os.path.join(
++                    os.path.dirname(sys.executable),
++                    f.read().strip()
++                )
++            base_ext = ""
++            libname = os.path.basename(loader_path)
++            libname_ext = [libname]
++        elif not ext:
+             import sysconfig
+             # Try to load library with platform-specific name, otherwise
+             # default to libname.[so|dll|dylib].  Sometimes, these files are
+diff --git a/numpy/f2py/tests/__init__.py b/numpy/f2py/tests/__init__.py
+index 4ed8fdd53..30053e24a 100644
+--- a/numpy/f2py/tests/__init__.py
++++ b/numpy/f2py/tests/__init__.py
+@@ -1,10 +1,10 @@
+ import pytest
+ 
+-from numpy.testing import IS_EDITABLE, IS_WASM
++from numpy.testing import IS_EDITABLE, IS_IOS, IS_WASM
+ 
+-if IS_WASM:
++if IS_WASM or IS_IOS:
+     pytest.skip(
+-        "WASM/Pyodide does not use or support Fortran",
++        "Platform does not use or support Fortran",
+         allow_module_level=True
+     )
+ 
+diff --git a/numpy/f2py/tests/util.py b/numpy/f2py/tests/util.py
+index 35e5d3bd8..39ea92070 100644
+--- a/numpy/f2py/tests/util.py
++++ b/numpy/f2py/tests/util.py
+@@ -23,7 +23,7 @@
+ import numpy
+ from numpy._utils import asunicode
+ from numpy.f2py._backends._meson import MesonBackend
+-from numpy.testing import IS_WASM, temppath
++from numpy.testing import IS_IOS, IS_WASM, temppath
+ 
+ #
+ # Check if compilers are available at all...
+@@ -104,7 +104,7 @@ def check_compilers(self):
+             self.compilers_checked = True
+ 
+ 
+-if not IS_WASM:
++if not IS_WASM and not IS_IOS:
+     checker = CompilerChecker()
+     checker.check_compilers()
+ 
+diff --git a/numpy/meson.build b/numpy/meson.build
+index 45d5a2b52..e30367207 100644
+--- a/numpy/meson.build
++++ b/numpy/meson.build
+@@ -71,7 +71,7 @@ endif
+ blas_order = get_option('blas-order')
+ if blas_order == ['auto']
+   blas_order = []
+-  if host_machine.system() == 'darwin'
++  if host_machine.system() in ['darwin', 'ios']
+     blas_order += 'accelerate'
+   endif
+   if host_machine.cpu_family() == 'x86_64'
+@@ -82,7 +82,7 @@ endif
+ lapack_order = get_option('lapack-order')
+ if lapack_order == ['auto']
+   lapack_order = []
+-  if host_machine.system() == 'darwin'
++  if host_machine.system() in ['darwin', 'ios']
+     lapack_order += 'accelerate'
+   endif
+   if host_machine.cpu_family() == 'x86_64'
+diff --git a/numpy/testing/__init__.pyi b/numpy/testing/__init__.pyi
+index ba3c9a2b7..82026ce72 100644
+--- a/numpy/testing/__init__.pyi
++++ b/numpy/testing/__init__.pyi
+@@ -4,8 +4,10 @@
+ from ._private.utils import (
+     HAS_LAPACK64,
+     HAS_REFCOUNT,
++    HAS_SUBPROCESSES,
+     IS_EDITABLE,
+     IS_INSTALLED,
++    IS_IOS,
+     IS_MUSL,
+     IS_PYPY,
+     IS_PYSTON,
+@@ -53,8 +55,10 @@
+ __all__ = [
+     "HAS_LAPACK64",
+     "HAS_REFCOUNT",
++    "HAS_SUBPROCESSES",
+     "IS_EDITABLE",
+     "IS_INSTALLED",
++    "IS_IOS",
+     "IS_MUSL",
+     "IS_PYPY",
+     "IS_PYSTON",
+diff --git a/numpy/testing/_private/utils.py b/numpy/testing/_private/utils.py
+index 65f4059f9..e8adddf0f 100644
+--- a/numpy/testing/_private/utils.py
++++ b/numpy/testing/_private/utils.py
+@@ -13,6 +13,7 @@
+ import pprint
+ import re
+ import shutil
++import subprocess
+ import sys
+ import sysconfig
+ import threading
+@@ -38,8 +39,9 @@
+         'assert_array_max_ulp', 'assert_warns', 'assert_no_warnings',
+         'assert_allclose', 'IgnoreException', 'clear_and_catch_warnings',
+         'SkipTest', 'KnownFailureException', 'temppath', 'tempdir', 'IS_PYPY',
+-        'HAS_REFCOUNT', "IS_WASM", 'suppress_warnings', 'assert_array_compare',
+-        'assert_no_gc_cycles', 'break_cycles', 'HAS_LAPACK64', 'IS_PYSTON',
++        'HAS_REFCOUNT', 'IS_IOS', 'IS_WASM', 'suppress_warnings',
++        'assert_array_compare', 'assert_no_gc_cycles', 'break_cycles',
++        'HAS_LAPACK64', 'HAS_SUBPROCESSES', 'IS_PYSTON',
+         'IS_MUSL', 'check_support_sve', 'NOGIL_BUILD',
+         'IS_EDITABLE', 'IS_INSTALLED', 'NUMPY_ROOT', 'run_threaded', 'IS_64BIT',
+         'BLAS_SUPPORTS_FPE',
+@@ -87,9 +89,13 @@ class KnownFailureException(Exception):
+         IS_INSTALLED = False
+ 
+ IS_WASM = platform.machine() in ["wasm32", "wasm64"]
++IS_IOS = sys.platform == "ios"
+ IS_PYPY = sys.implementation.name == 'pypy'
+ IS_PYSTON = hasattr(sys, "pyston_version_info")
+ HAS_REFCOUNT = getattr(sys, 'getrefcount', None) is not None and not IS_PYSTON
++HAS_SUBPROCESSES = getattr(subprocess, "_can_fork_exec", True) and sys.platform not in [
++    "android"
++]
+ BLAS_SUPPORTS_FPE = True
+ if platform.system() == 'Darwin' or platform.machine() == 'arm64':
+     try:
+diff --git a/numpy/testing/_private/utils.pyi b/numpy/testing/_private/utils.pyi
+index 43981a5de..8c2c19037 100644
+--- a/numpy/testing/_private/utils.pyi
++++ b/numpy/testing/_private/utils.pyi
+@@ -40,7 +40,9 @@
+ )
+ 
+ __all__ = [  # noqa: RUF022
++    "HAS_SUBPROCESSES",
+     "IS_EDITABLE",
++    "IS_IOS",
+     "IS_MUSL",
+     "IS_PYPY",
+     "IS_PYSTON",
+@@ -127,12 +129,14 @@ def __enter__(self) -> None: ...
+ NUMPY_ROOT: Final[Path] = ...
+ IS_INSTALLED: Final[bool] = ...
+ IS_EDITABLE: Final[bool] = ...
++IS_IOS: Final[bool] = ...
+ IS_MUSL: Final[bool] = ...
+ IS_PYPY: Final[bool] = ...
+ IS_PYSTON: Final[bool] = ...
+ IS_WASM: Final[bool] = ...
+ HAS_REFCOUNT: Final[bool] = ...
+ HAS_LAPACK64: Final[bool] = ...
++HAS_SUBPROCESSES: Final[bool] = ...
+ NOGIL_BUILD: Final[bool] = ...
+ 
+ class KnownFailureException(Exception): ...

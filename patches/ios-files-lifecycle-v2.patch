@@ -1,0 +1,464 @@
+diff --git a/intern/ghost/intern/GHOST_FilePickerIOS.hh b/intern/ghost/intern/GHOST_FilePickerIOS.hh
+index abf7a3a39ff5652210d96f1f15641f61182438db..31552c22fdd86a103588f59cd891a3be7848bc72 100644
+--- a/intern/ghost/intern/GHOST_FilePickerIOS.hh
++++ b/intern/ghost/intern/GHOST_FilePickerIOS.hh
+@@ -24,3 +24,12 @@ void GHOST_ios_storeSecurityScopedURL(void *nsurl);
+  * \return An NSURL* (cast to void*) or nullptr if not found.
+  */
+ void *GHOST_ios_lookupSecurityScopedURL(const char *filepath);
++
++/**
++ * Append one native Files handoff message to Documents/BlenderFiles.log.
++ * The void pointer is an NSString * when called from Objective-C++.
++ */
++void GHOST_ios_logFileEvent(void *nsstring);
++
++/** Reset the native Files handoff log at application launch. */
++void GHOST_ios_resetFileLog();
+diff --git a/intern/ghost/intern/GHOST_FilePickerIOS.mm b/intern/ghost/intern/GHOST_FilePickerIOS.mm
+index bf0b5f1824c9e5e6e0516f9cfbc7771dca091391..821446fde991a25e36a51f5deead678ca44fc354 100644
+--- a/intern/ghost/intern/GHOST_FilePickerIOS.mm
++++ b/intern/ghost/intern/GHOST_FilePickerIOS.mm
+@@ -21,6 +21,67 @@
+ #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+ #import <objc/runtime.h>
+ 
++#pragma mark - Persistent File-Handoff Diagnostics
++
++static NSObject *s_fileLogLock = [[NSObject alloc] init];
++
++static NSURL *fileHandoffLogURL()
++{
++  NSURL *documentsURL =
++      [[[NSFileManager defaultManager] URLsForDirectory:NSDocumentDirectory
++                                              inDomains:NSUserDomainMask] firstObject];
++  return [documentsURL URLByAppendingPathComponent:@"BlenderFiles.log"];
++}
++
++void GHOST_ios_resetFileLog()
++{
++  @autoreleasepool {
++    @synchronized(s_fileLogLock) {
++      NSURL *logURL = fileHandoffLogURL();
++      if (logURL) {
++        [[NSFileManager defaultManager] removeItemAtURL:logURL error:nil];
++      }
++    }
++  }
++}
++
++void GHOST_ios_logFileEvent(void *nsstring)
++{
++  @autoreleasepool {
++    NSString *message = (NSString *)nsstring;
++    if (!message) {
++      return;
++    }
++
++    NSString *line = [NSString
++        stringWithFormat:@"%@ | %@\n", [[NSDate date] descriptionWithLocale:nil], message];
++    NSLog(@"Blender Files: %@", message);
++
++    @synchronized(s_fileLogLock) {
++      NSURL *logURL = fileHandoffLogURL();
++      NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
++      if (!logURL || !data) {
++        return;
++      }
++
++      NSFileManager *fileManager = [NSFileManager defaultManager];
++      if (![fileManager fileExistsAtPath:logURL.path]) {
++        [fileManager createFileAtPath:logURL.path contents:nil attributes:nil];
++      }
++
++      NSError *error = nil;
++      NSFileHandle *handle = [NSFileHandle fileHandleForWritingToURL:logURL error:&error];
++      if (!handle) {
++        NSLog(@"Blender Files: could not open diagnostic log: %@", error);
++        return;
++      }
++      [handle seekToEndOfFile];
++      [handle writeData:data];
++      [handle closeFile];
++    }
++  }
++}
++
+ #pragma mark - Security-Scoped URL Storage
+ 
+ /**
+@@ -97,12 +158,14 @@ void *GHOST_ios_lookupSecurityScopedURL(const char *filepath)
+ - (void)deliverResultURL:(NSURL *)url
+ {
+   if (_resultDelivered) {
++    GHOST_ios_logFileEvent((__bridge void *)@"picker ignored duplicate callback");
+     return;
+   }
+   _resultDelivered = YES;
+ 
+   GHOST_SystemIOS *system = _ghostSystem;
+   if (!system) {
++    GHOST_ios_logFileEvent((__bridge void *)@"picker callback has no GHOST system");
+     return;
+   }
+ 
+@@ -113,7 +176,8 @@ void *GHOST_ios_lookupSecurityScopedURL(const char *filepath)
+     window = system->current_active_window;
+   }
+   if (!window || !system->validWindow(window)) {
+-    NSLog(@"Blender Files: no valid Blender window for the document-picker result");
++    GHOST_ios_logFileEvent(
++        (__bridge void *)@"picker callback has no valid Blender window");
+     return;
+   }
+ 
+@@ -123,14 +187,15 @@ void *GHOST_ios_lookupSecurityScopedURL(const char *filepath)
+ 
+     const char *path = url.fileSystemRepresentation;
+     if (!path) {
+-      NSLog(@"Blender Files: selected URL has no file-system representation");
++      GHOST_ios_logFileEvent(
++          (__bridge void *)@"picker URL has no file-system representation");
+       return;
+     }
+ 
+     const size_t pathLen = strlen(path);
+     pathCopy = static_cast<char *>(malloc(pathLen + 1));
+     if (!pathCopy) {
+-      NSLog(@"Blender Files: could not allocate the selected path");
++      GHOST_ios_logFileEvent((__bridge void *)@"picker could not allocate selected path");
+       return;
+     }
+     memcpy(pathCopy, path, pathLen + 1);
+@@ -144,13 +209,19 @@ void *GHOST_ios_lookupSecurityScopedURL(const char *filepath)
+   system->notifyExternalEventProcessed();
+   window->needsDisplayUpdate();
+ 
+-  NSLog(@"Blender Files: delivered %@ from the native document picker",
+-        url ? url.lastPathComponent : @"cancel");
++  NSString *result = [NSString
++      stringWithFormat:@"picker delivered result: %@", url ? url.path : @"cancel"];
++  GHOST_ios_logFileEvent((__bridge void *)result);
+ }
+ 
+ - (void)documentPicker:(UIDocumentPickerViewController *)controller
+     didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls
+ {
++  NSString *callback =
++      [NSString stringWithFormat:@"picker delegate callback, URL count=%lu",
++                                 (unsigned long)urls.count];
++  GHOST_ios_logFileEvent((__bridge void *)callback);
++
+   if (urls.count > 0) {
+     NSURL *url = urls.firstObject;
+ 
+@@ -174,12 +245,14 @@ void *GHOST_ios_lookupSecurityScopedURL(const char *filepath)
+ 
+ - (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller
+ {
++  GHOST_ios_logFileEvent((__bridge void *)@"picker delegate reported cancel");
+   [self deliverResultURL:nil];
+ }
+ 
+ - (void)presentationControllerDidDismiss:(UIPresentationController *)presentationController
+ {
+   /* Handle swipe-to-dismiss as a cancel. */
++  GHOST_ios_logFileEvent((__bridge void *)@"picker presentation dismissed");
+   [self documentPickerWasCancelled:nil];
+ }
+ 
+@@ -198,6 +271,14 @@ GHOST_TSuccess GHOST_SystemIOS::showNativeFileDialog(const char *title,
+     }
+ 
+     GHOST_WindowIOS *originWindow = current_active_window;
++    NSString *beginMessage = [NSString
++        stringWithFormat:@"present picker; windows=%lu key=%@ level=%.0f root=%@",
++                         (unsigned long)[UIApplication sharedApplication].windows.count,
++                         originWindow->rootWindow.isKeyWindow ? @"yes" : @"no",
++                         originWindow->rootWindow.windowLevel,
++                         NSStringFromClass(
++                             [originWindow->rootWindow.rootViewController class])];
++    GHOST_ios_logFileEvent((__bridge void *)beginMessage);
+ 
+     /* Build an array of UTTypes from the filter_glob.
+      * Supported patterns: "*.blend", "*.png;*.jpg", etc.
+@@ -362,6 +443,9 @@ GHOST_TSuccess GHOST_SystemIOS::showNativeFileDialog(const char *title,
+                                                      completion:^{
+                                                        picker.presentationController.delegate =
+                                                            delegate;
++                                                       GHOST_ios_logFileEvent(
++                                                           (__bridge void *)
++                                                               @"folder picker presentation completed");
+                                                      }];
+                                 }]];
+ 
+@@ -388,6 +472,9 @@ GHOST_TSuccess GHOST_SystemIOS::showNativeFileDialog(const char *title,
+                                                         completion:^{
+                                                           picker.presentationController.delegate =
+                                                               delegate;
++                                                          GHOST_ios_logFileEvent(
++                                                              (__bridge void *)
++                                                                  @"picker presentation completed");
+                                                         }];
+                                    }];
+       }
+@@ -396,6 +483,8 @@ GHOST_TSuccess GHOST_SystemIOS::showNativeFileDialog(const char *title,
+                              animated:YES
+                            completion:^{
+                              picker.presentationController.delegate = delegate;
++                             GHOST_ios_logFileEvent(
++                                 (__bridge void *)@"picker presentation completed");
+                            }];
+       }
+     }
+diff --git a/intern/ghost/intern/GHOST_SystemIOS.mm b/intern/ghost/intern/GHOST_SystemIOS.mm
+index b89cdf43a229df21321bf85c6e0623f7a3fa251a..68365e35f72d8d76848360581cb2ec0af7152531 100644
+--- a/intern/ghost/intern/GHOST_SystemIOS.mm
++++ b/intern/ghost/intern/GHOST_SystemIOS.mm
+@@ -56,6 +56,97 @@ int main_ios_callback(int argc, const char **argv);
+  * See source/blender/windowmanager/wm_ios_bridge.h for declarations. */
+ #include "../../../../source/blender/windowmanager/wm_ios_bridge.h"
+ 
++/* URLs can arrive in launchOptions before GHOST has created a window. Retain them and only
++ * dispatch the Blender event after main_ios_callback has installed both the system and context. */
++static NSMutableArray<NSURL *> *s_pendingOpenURLs = nil;
++
++static void blender_ios_queueOpenURL(NSURL *url, NSString *source)
++{
++  if (!url || !url.isFileURL || !url.path) {
++    NSString *message =
++        [NSString stringWithFormat:@"%@ rejected non-file URL: %@", source, url];
++    GHOST_ios_logFileEvent((__bridge void *)message);
++    return;
++  }
++
++  /* Retain the provider-issued URL itself. Rebuilding an NSURL from url.path discards the
++   * provider's sandbox extension and makes an otherwise valid handoff unreadable. */
++  GHOST_ios_storeSecurityScopedURL((__bridge void *)url);
++
++  if (!s_pendingOpenURLs) {
++    s_pendingOpenURLs = [[NSMutableArray alloc] init];
++  }
++  for (NSURL *pendingURL in s_pendingOpenURLs) {
++    if ([pendingURL.path isEqualToString:url.path]) {
++      NSString *message =
++          [NSString stringWithFormat:@"%@ duplicate already queued: %@", source, url.path];
++      GHOST_ios_logFileEvent((__bridge void *)message);
++      return;
++    }
++  }
++
++  [s_pendingOpenURLs addObject:url];
++  NSString *message = [NSString
++      stringWithFormat:@"%@ queued: %@ (pending=%lu)",
++                       source,
++                       url.path,
++                       (unsigned long)s_pendingOpenURLs.count];
++  GHOST_ios_logFileEvent((__bridge void *)message);
++}
++
++static void blender_ios_deliverPendingOpenURLs()
++{
++  if (![NSThread isMainThread]) {
++    dispatch_async(dispatch_get_main_queue(), ^{
++      blender_ios_deliverPendingOpenURLs();
++    });
++    return;
++  }
++  if (s_pendingOpenURLs.count == 0) {
++    return;
++  }
++
++  GHOST_SystemIOS *system = static_cast<GHOST_SystemIOS *>(GHOST_ISystem::getSystem());
++  const BOOL applicationIsActive =
++      [UIApplication sharedApplication].applicationState == UIApplicationStateActive;
++  if (!applicationIsActive || !C || !system || !system->current_active_window ||
++      !system->validWindow(system->current_active_window))
++  {
++    NSString *message = [NSString
++        stringWithFormat:@"delivery deferred; app=%@ context=%@ system=%@ window=%@ pending=%lu",
++                         applicationIsActive ? @"active" : @"inactive",
++                         C ? @"ready" : @"missing",
++                         system ? @"ready" : @"missing",
++                         (system && system->current_active_window) ? @"ready" : @"missing",
++                         (unsigned long)s_pendingOpenURLs.count];
++    GHOST_ios_logFileEvent((__bridge void *)message);
++    return;
++  }
++
++  NSArray<NSURL *> *snapshot = [NSArray arrayWithArray:s_pendingOpenURLs];
++  for (NSURL *url in snapshot) {
++    GHOST_WindowIOS *window = system->current_active_window;
++    if (!system->handleOpenDocumentRequest(url.path)) {
++      NSString *message =
++          [NSString stringWithFormat:@"delivery deferred by GHOST: %@", url.path];
++      GHOST_ios_logFileEvent((__bridge void *)message);
++      continue;
++    }
++
++    [s_pendingOpenURLs removeObject:url];
++    system->notifyExternalEventProcessed();
++    if (window && system->validWindow(window)) {
++      window->needsDisplayUpdate();
++    }
++
++    NSString *message = [NSString
++        stringWithFormat:@"delivered open-main-file event: %@ (pending=%lu)",
++                         url.path,
++                         (unsigned long)s_pendingOpenURLs.count];
++    GHOST_ios_logFileEvent((__bridge void *)message);
++  }
++}
++
+ @interface IOSAppDelegate : UIResponder <UIApplicationDelegate>
+ 
+ @property(strong, nonatomic) UIWindow *window;
+@@ -67,8 +158,25 @@ int main_ios_callback(int argc, const char **argv);
+ - (BOOL)application:(UIApplication *)application
+     didFinishLaunchingWithOptions:(NSDictionary *)launchOptions
+ {
++  GHOST_ios_resetFileLog();
++  GHOST_ios_logFileEvent(
++      (__bridge void *)@"FILES_LIFECYCLE_V2 launch began; diagnostic log reset");
++
++  NSURL *launchURL = launchOptions[UIApplicationLaunchOptionsURLKey];
++  if (launchURL) {
++    blender_ios_queueOpenURL(launchURL, @"cold launch");
++  }
++  else {
++    GHOST_ios_logFileEvent((__bridge void *)@"cold launch has no document URL");
++  }
++
+   main_ios_callback(argc, argv);
+ 
++  GHOST_ios_logFileEvent((__bridge void *)@"Blender context initialization returned");
++  dispatch_async(dispatch_get_main_queue(), ^{
++    blender_ios_deliverPendingOpenURLs();
++  });
++
+   return YES;
+ }
+ 
+@@ -76,16 +184,26 @@ int main_ios_callback(int argc, const char **argv);
+             openURL:(NSURL *)url
+             options:(NSDictionary<UIApplicationOpenURLOptionsKey, id> *)options
+ {
+-  GHOST_SystemIOS *system = static_cast<GHOST_SystemIOS *>(GHOST_ISystem::getSystem());
++  if (!url) {
++    GHOST_ios_logFileEvent((__bridge void *)@"warm open callback contained no URL");
++    return NO;
++  }
+ 
+-  /* Preserve the provider-issued URL. Rebuilding an NSURL from url.path loses the sandbox
+-   * extension, so files launched directly from the Files app would otherwise be unreadable. */
+-  GHOST_ios_storeSecurityScopedURL((__bridge void *)url);
+-  system->handleOpenDocumentRequest(url.path);
++  NSNumber *openInPlace = options[UIApplicationOpenURLOptionsOpenInPlaceKey];
++  NSString *source = [NSString
++      stringWithFormat:@"warm open (open-in-place=%@)", openInPlace.boolValue ? @"yes" : @"no"];
++  blender_ios_queueOpenURL(url, source);
++  blender_ios_deliverPendingOpenURLs();
+ 
+   return YES;
+ }
+ 
++- (void)applicationDidBecomeActive:(UIApplication *)application
++{
++  GHOST_ios_logFileEvent((__bridge void *)@"application became active; flushing URL queue");
++  blender_ios_deliverPendingOpenURLs();
++}
++
+ - (void)applicationDidEnterBackground:(UIApplication *)application
+ {
+   if (!C) {
+diff --git a/intern/ghost/intern/GHOST_WindowIOS.mm b/intern/ghost/intern/GHOST_WindowIOS.mm
+index 5c3b874a27e2627a7be9b9fd04016809b8dda806..e19bc04e14e5e2b6ec3323361837c0c4c06410bd 100644
+--- a/intern/ghost/intern/GHOST_WindowIOS.mm
++++ b/intern/ghost/intern/GHOST_WindowIOS.mm
+@@ -629,6 +629,16 @@ typedef struct UserInputEvent {
+ }
+ 
+ /* Allow simultaneous gestures for multi-finger pans and zooms. */
++- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
++       shouldReceiveTouch:(UITouch *)touch
++{
++  /* Blender's recognizers belong to the Metal surface. They must be completely inactive while
++   * UIKit is presenting a document picker (including its remote Files view), otherwise their
++   * failure/cancellation rules can consume a tap before the picker selects the document. */
++  UIViewController *rootViewController = window ? window->rootWindow.rootViewController : nil;
++  return rootViewController.presentedViewController == nil;
++}
++
+ - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
+     shouldRecognizeSimultaneouslyWithGestureRecognizer:
+         (UIGestureRecognizer *)otherGestureRecognizer
+@@ -1464,7 +1474,9 @@ GHOST_WindowIOS::GHOST_WindowIOS(GHOST_SystemIOS *systemIos,
+   rootWindow = (UIWindow *)ghost_rootWindow;
+ 
+   [ghost_rootWindow setSystemAndWindowIOS:m_systemIOS windowIOS:this];
+-  rootWindow.windowLevel = UIWindowLevelAlert;
++  /* This is the application's content window, not transient alert UI. Keeping the main surface
++   * at UIWindowLevelAlert puts it above UIKit's document-provider hosting window. */
++  rootWindow.windowLevel = UIWindowLevelNormal;
+ 
+   GHOST_ASSERT(rootWindow, "UIWindow not valid");
+ 
+@@ -1491,6 +1503,11 @@ GHOST_WindowIOS::GHOST_WindowIOS(GHOST_SystemIOS *systemIos,
+     m_uiview_controller.modalPresentationStyle = UIModalPresentationPageSheet;
+   }
+   rootWindow.rootViewController = m_uiview_controller;
++  if (full_screen_) {
++    /* IOSAppDelegate.window is the authoritative scene window used by UIKit for document
++     * handoffs. Info.plist no longer creates a second storyboard-owned application window. */
++    [UIApplication sharedApplication].delegate.window = rootWindow;
++  }
+ 
+   /* Run UIKit's lifecycle only after the controller is attached to its real window, then
+    * take the attached window bounds as the initial client size. */
+diff --git a/release/ios/Blender.app/Info.plist b/release/ios/Blender.app/Info.plist
+index 16e79b4537821a152ae86b93f57e4df0a8ce4c3d..bc5810d1dd0c8495c3668fadcccdd84cd80b7d25 100644
+--- a/release/ios/Blender.app/Info.plist
++++ b/release/ios/Blender.app/Info.plist
+@@ -26,8 +26,6 @@
+ 		</dict>
+ 	</array>
+ 	<key>UILaunchStoryboardName</key>
+-	<string>LaunchScreen</string>
+-	<key>UIMainStoryboardFile</key>
+ 	<string>Main</string>
+ 	<key>CFBundleExecutable</key>
+ 	<string>Blender</string>
+@@ -61,8 +59,6 @@
+ 	<true/>
+     <key>UIFileSharingEnabled</key>
+     <true/>
+-    <key>UISupportsDocumentBrowser</key>
+-    <true/>
+     <key>LSSupportsOpeningDocumentsInPlace</key>
+     <true/>
+ 	<key>UISupportedInterfaceOrientations</key>
+diff --git a/source/blender/python/intern/bpy_interface.cc b/source/blender/python/intern/bpy_interface.cc
+index f0cb9f88e795ef9fd2a7a1ab253b241c12fa43a6..a30aea1b1b75a3cb8d8b000f13afb2db64f7e1a0 100644
+--- a/source/blender/python/intern/bpy_interface.cc
++++ b/source/blender/python/intern/bpy_interface.cc
+@@ -532,10 +532,20 @@ void BPY_python_start(bContext *C, int argc, const char **argv)
+         has_python_executable = true;
+       }
+       else {
++#  ifdef WITH_APPLE_CROSSPLATFORM
++        /* iOS embeds libpython but has no separate Python executable. CPython's Apple framework
++         * loader (used by NumPy extension modules) still requires sys.executable to identify the
++         * containing app binary, so use Blender's executable rather than replacing it with None. */
++        status = PyConfig_SetBytesString(
++            &config, &config.executable, BKE_appdir_program_path());
++        pystatus_exit_on_error(status);
++        has_python_executable = true;
++#  else
+         /* Set to `sys.executable = None` below (we can't do before Python is initialized). */
+         fprintf(stderr,
+                 "Unable to find the Python binary, "
+                 "the multiprocessing module may not be functional!\n");
++#  endif
+       }
+     }
+ 
