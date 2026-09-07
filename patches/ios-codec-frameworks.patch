@@ -36,3 +36,16 @@ index 133bf89..68719d0 100644
  if(APPLE)
    # On macOS, prevent the `meshopt` library (already present in the application bundle)
    # from being wrongly copied into the Xcode archive used for application distribution,
++diff --git a/source/blender/blenkernel/intern/blendfile.cc b/source/blender/blenkernel/intern/blendfile.cc
++--- a/source/blender/blenkernel/intern/blendfile.cc
+++++ b/source/blender/blenkernel/intern/blendfile.cc
++@@ -1783,8 +1783,9 @@ namespace bke::blendfile {
++ PartialWriteContext::PartialWriteContext(Main &reference_main)
++     : reference_root_filepath_(BKE_main_blendfile_path(&reference_main))
++ {
++   if (!reference_root_filepath_.empty()) {
++     STRNCPY(this->bmain.filepath, reference_root_filepath_.c_str());
++   }
+++  this->bmain.colorspace = reference_main.colorspace;
++   /* Only for IDs matching existing data in current G_MAIN. */
++   matching_uid_map_ = BKE_main_idmap_create(&this->bmain, false, nullptr, MAIN_IDMAP_TYPE_UID);
