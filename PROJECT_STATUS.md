@@ -1,6 +1,26 @@
 # Blender iPad project status
 
-Updated: **6 September 2026**, following the owner's confirmation and repository consolidation.
+Updated: **7 September 2026**, following the build #83 failure investigation.
+
+## Build #83 correction and Scene partial-write investigation
+
+[Build #83](https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/actions/runs/34084686140)
+failed before compilation in `Apply iOS codec framework integration`:
+`source/blender/blenkernel/intern/blendfile.cc:1783: patch does not apply`.
+It produced no new IPA and did not test the proposed runtime fix.
+
+The pinned source `2bc556e58e82eb3a801895f2cb1881c0267e5cd5` already initializes
+`PartialWriteContext::bmain.colorspace` from `reference_main.colorspace`.
+The exact `blendfile.cc` blob is `ab8fb8f0012f827680efc12b3acf081eb260244f`.
+The earlier claim that this initialization was missing was incorrect. Remove the
+redundant `blendfile.cc` hunk from `ios-codec-frameworks.patch`; retain its two
+codec bridge changes. This repairs patch application, with no new runtime fix.
+
+The owner's finite probes still identify a Scene partial-write failure: F and G
+crash, while H (ordinary Scene copy), I (embedded master Collection copy), and J
+(Collection/Object/Mesh/Material partial write) pass. The Scene-writing crash
+remains unresolved. Do not treat this build repair or a subsequent green build
+as evidence that F is fixed, or request a repeat of F solely for this repair.
 
 ## Working baseline
 
