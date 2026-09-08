@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+"""Install GhostBlender's native transport against the audited source tree."""
+from pathlib import Path
+import shutil
+import sys
+
+
+def transform(root: Path, harness: Path):
+    interface = root / 'source/blender/python/intern/bpy_interface.cc'
+    cmake = interface.parent / 'CMakeLists.txt'
+    content = interface.read_text()
+    replacements = [
+        ('#include <Python.h>\n', '#include <Python.h>\n#ifdef WITH_GHOSTBRIDGE_IOS\nextern "C" PyObject *PyInit__ghostbridge_transport(void);\n#endif\n'),
+        ('static _inittab bpy_internal_modules[] = {\n', 'static _inittab bpy_internal_modules[] = {\n#ifdef WITH_GHOSTBRIDGE_IOS\n    {"_ghostbridge_transport", PyInit__ghostbridge_transport},\n#endif\n'),
+    ]
+    if 'WITH_GHOSTBRIDGE_IOS' in content:
+        raise RuntimeError('Agent bridge already installed; use a clean source checkout')
+    for old, new in replacements:
+        if content.count(old) != 1:
+            raise RuntimeError(f'Pinned bpy_interface.cc anchor changed: {old!r}')
+        content = content.replace(old, new, 1)
+    cm = cmake.read_text()
+    anchor = 'blender_add_lib(bf_python "${SRC}" "${INC}" "${INC_SYS}" "${LIB}")'
+    if cm.count(anchor) != 1 or 'ghostbridge_transport.mm' in cm:
+        raise RuntimeError('Pinned bf_python CMake anchor changed')
+    addition = '''if(WITH_APPLE_CROSSPLATFORM)
+  list(APPEND SRC ghostbridge_transport.mm)
+  add_definitions(-DWITH_GHOSTBRIDGE_IOS)
+  set_source_files_properties(ghostbridge_transport.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+  find_library(GHOSTBRIDGE_FOUNDATION Foundation REQUIRED)
+  find_library(GHOSTBRIDGE_UIKIT UIKit REQUIRED)
+  list(APPEND LIB ${GHOSTBRIDGE_FOUNDATION} ${GHOSTBRIDGE_UIKIT})
+endif()
+
+'''
+    target = root / 'scripts/startup/ghostbridge'
+    if target.exists():
+        raise RuntimeError(f'Refusing to overwrite {target}')
+    # Validate every anchor and destination before modifying source files.
+    interface.write_text(content)
+    cmake.write_text(cm.replace(anchor, addition + anchor, 1))
+    shutil.copyfile(harness / 'agent/native/ghostbridge_transport.mm', interface.parent / 'ghostbridge_transport.mm')
+    shutil.copytree(harness / 'agent/runtime', target, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    print('Installed native transport and persistent GhostBlender startup dispatcher')
+
+
+if __name__ == '__main__':
+    transform(Path(sys.argv[1]).resolve(), Path(__file__).resolve().parents[1])

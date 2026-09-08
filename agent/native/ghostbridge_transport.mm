@@ -114,6 +114,12 @@ static PyObject *gb_request(PyObject *, PyObject *args)
   if (body_len > (Py_ssize_t)GB_LIMIT || strlen(token) > 512) {
     return PyErr_Format(PyExc_ValueError, "request_too_large");
   }
+  for (const char *p = token; *p; ++p) {
+    if (!( (*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') ||
+           (*p >= '0' && *p <= '9') || *p == '-' || *p == '_' )) {
+      return PyErr_Format(PyExc_ValueError, "invalid_device_token");
+    }
+  }
   @autoreleasepool {
     NSURL *target = [NSURL URLWithString:[NSString stringWithUTF8String:url]];
     NSString *credential = [NSString stringWithUTF8String:token];

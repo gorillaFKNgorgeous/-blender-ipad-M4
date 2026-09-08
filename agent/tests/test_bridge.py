@@ -139,6 +139,14 @@ class RuntimeTests(unittest.TestCase):
         self.assertFalse(value['result']['ok'])
         self.assertEqual(self.calls,[])
 
+    def test_switching_scenes_without_loading_a_file_is_detected(self):
+        self.bpy.context = types.SimpleNamespace(scene=types.SimpleNamespace(as_pointer=lambda:1))
+        self.runtime._sync_scene()
+        self.bpy.context.scene = types.SimpleNamespace(as_pointer=lambda:2)
+        result = self.runtime.execute(self.job)
+        self.assertFalse(result['result']['ok'])
+        self.assertEqual(self.calls, [])
+
     def test_script_workspace_and_compare_before_write(self):
         r=self.runtime.write_script('scene.py','result=1')
         self.assertEqual(self.runtime.read_script('scene.py')['sha256'],r['sha256'])
@@ -227,6 +235,7 @@ class HttpAndOAuthTests(unittest.TestCase):
         redirect=oauth.approve(ticket,'o'*40)
         query=parse_qs(urlsplit(redirect).query)
         self.assertEqual(query['state'],['original-state'])
+        self.assertEqual(query['iss'],[oauth.origin])
         token_params={'client_id':'client','client_secret':'c'*40,'resource':oauth.resource,
                       'grant_type':'authorization_code','code':query['code'][0],
                       'redirect_uri':params['redirect_uri'],'code_verifier':verifier}

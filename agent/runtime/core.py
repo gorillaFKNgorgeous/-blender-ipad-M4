@@ -5,6 +5,7 @@ import base64
 import contextlib
 import hashlib
 import io
+import itertools
 import json
 import os
 from pathlib import Path
@@ -56,6 +57,7 @@ class Runtime:
         self.scripts.mkdir(exist_ok=True)
         self.boot_id = uuid.uuid4().hex
         self.scene_id = uuid.uuid4().hex
+        self._scene_pointer = None
         self.started = time.time()
         self.state_path = self.root / 'journal.json'
         self.journal = json.loads(self.state_path.read_text()) if self.state_path.exists() else {}
@@ -73,8 +75,19 @@ class Runtime:
 
     def scene_changed(self):
         self.scene_id = uuid.uuid4().hex
+        self._scene_pointer = None
+
+    def _sync_scene(self):
+        context = getattr(self.bpy, 'context', None)
+        scene = getattr(context, 'scene', None)
+        if scene is not None:
+            pointer = scene.as_pointer()
+            if self._scene_pointer is not None and self._scene_pointer != pointer:
+                self.scene_id = uuid.uuid4().hex
+            self._scene_pointer = pointer
 
     def heartbeat(self):
+        self._sync_scene()
         return {'boot_id': self.boot_id, 'scene_id': self.scene_id,
                 'blender_version': self.bpy.app.version_string,
                 'python_version': sys.version.split()[0],
@@ -88,6 +101,7 @@ class Runtime:
 
     def execute(self, job):
         """Journal before execution. A duplicate or changed scene never repeats an edit."""
+        self._sync_scene()
         job_id = job.get('job_id', '')
         if not isinstance(job_id, str) or not ID_RE.fullmatch(job_id):
             raise ValueError('invalid_job_id')
@@ -139,7 +153,7 @@ class Runtime:
             raise ValueError('negative_offset')
         scene = bpy.context.scene
         objects = []
-        for obj in list(scene.objects)[offset:offset + limit]:
+        for obj in itertools.islice(scene.objects, offset, offset + limit):
             item = {'name': obj.name, 'type': obj.type, 'location': list(obj.location),
                     'rotation_euler': list(obj.rotation_euler), 'scale': list(obj.scale),
                     'dimensions': list(obj.dimensions), 'parent': obj.parent.name if obj.parent else None,

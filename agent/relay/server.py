@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import threading
+import time
 from urllib.parse import parse_qs, urlsplit
 
 from oauth import OAuth, same
@@ -39,11 +40,12 @@ def schema(properties=None, required=None):
 def tools_list():
     string = {'type': 'string'}
     job_schema = schema({'job_id': string}, ['job_id'])
+    result_schema = schema({'job_id': string, 'wait_seconds': {'type':'number','minimum':0,'maximum':10}}, ['job_id'])
     result = [
         {'name': 'status', 'description': 'Inspect device connectivity, current scene_id, session, version and measured memory.',
          'inputSchema': schema(), 'annotations': {'readOnlyHint': True, 'idempotentHint': True}},
         {'name': 'job_result', 'description': 'Read a job outcome; completed captures include image content. Poll after an enqueued tool, before dependent work.',
-         'inputSchema': job_schema, 'annotations': {'readOnlyHint': True, 'idempotentHint': True}},
+         'inputSchema': result_schema, 'annotations': {'readOnlyHint': True, 'idempotentHint': True}},
         {'name': 'cancel_job', 'description': 'Cancel a queued job. Issued Python/native work cannot be forcibly interrupted.',
          'inputSchema': job_schema, 'annotations': {'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True}},
     ]
@@ -70,7 +72,8 @@ def tools_list():
                                        'destructiveHint': name == 'execute_python',
                                        'idempotentHint': True, 'openWorldHint': name == 'execute_python'}})
     for tool in result:
-        tool['_meta'] = {'securitySchemes': [{'type':'oauth2','scopes':['blender']}]}
+        tool['securitySchemes'] = [{'type':'oauth2','scopes':['blender']}]
+        tool['_meta'] = {'securitySchemes': tool['securitySchemes']}
     return result
 
 
@@ -112,7 +115,12 @@ class App:
         if name == 'status':
             return self.store.status(self.device_id)
         if name == 'job_result':
-            return self.store.result(self.device_id, args['job_id'])
+            deadline = time.monotonic() + args.get('wait_seconds', 2)
+            while True:
+                value = self.store.result(self.device_id, args['job_id'])
+                if value['state'] not in ('queued','issued') or time.monotonic() >= deadline:
+                    return value
+                time.sleep(0.05)
         if name == 'cancel_job':
             return self.store.cancel(self.device_id, args['job_id'])
         args = dict(args)

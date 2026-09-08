@@ -160,6 +160,7 @@ git -C "$SOURCE_DIR" apply "$RUNTIME_LINKAGE_PATCH"
 git -C "$SOURCE_DIR" apply --check "$FILES_LIFECYCLE_PATCH"
 git -C "$SOURCE_DIR" apply "$FILES_LIFECYCLE_PATCH"
 python3 "$CODEC_TRANSFORM" "$SOURCE_DIR"
+python3 "$HARNESS_DIR/scripts/apply-ios-agent-bridge.py" "$SOURCE_DIR"
 git -C "$SOURCE_DIR" diff --check
 
 version_header="$SOURCE_DIR/source/blender/blenkernel/BKE_blender_version.h"

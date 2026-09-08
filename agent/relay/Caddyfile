@@ -1,0 +1,6 @@
+{$PUBLIC_ORIGIN} {
+    request_body {
+        max_size 3MB
+    }
+    reverse_proxy relay:8080
+}

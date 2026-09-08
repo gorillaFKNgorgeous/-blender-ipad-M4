@@ -1,6 +1,17 @@
 # Blender iPad project status
 
-Updated: **7 September 2026**, following the build #83 failure investigation.
+Updated: **8 September 2026**, for the live MCP bridge implementation.
+
+## Live MCP bridge — 8 September 2026
+
+New native transport, main-thread runtime tools, durable relay jobs, OAuth,
+client tests and build integration have been implemented. The first independent
+agent check run passed both iOS SDK syntax compilation and official MCP-client
+interoperability: https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/actions/runs/34223282161.
+The live device milestone remains incomplete until a new IPA is installed, the
+relay is hosted with persistent storage, and pairing/acceptance succeeds.
+See [agent/HANDOFF.md](agent/HANDOFF.md) for current continuation instructions.
+This does not resolve the Scene partial-write crash described below.
 
 ## Build #83 correction and Scene partial-write investigation
 

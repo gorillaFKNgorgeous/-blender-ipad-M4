@@ -1,0 +1,30 @@
+services:
+  relay:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ghostblender-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+  https:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      PUBLIC_ORIGIN: ${PUBLIC_ORIGIN}
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on: [relay]
+volumes:
+  ghostblender-data:
+  caddy-data:
+  caddy-config:

@@ -6,6 +6,16 @@ This repository contains the workflows, dependency bootstrap, packaging scripts,
 
 **Current working baseline: build #81, confirmed by the owner on 6 September 2026.** Saving and file functions work in normal use; exhaustive edge-case testing remains follow-up work. **`main` is the sole development branch** and contains this implementation. Siri, the offline assistant, and agent access are future development on this baseline.
 
+## Live agent connection implementation
+
+A new [live MCP bridge](agent/README.md) is implemented against this 5.2 baseline.
+It includes native outbound HTTPS networking, a main-thread Python dispatcher,
+scene inspection, code execution, capture, diagnostics and persistent scripts,
+plus an authenticated relay. **A live iPad connection is not yet verified.**
+See the [resumable checklist](agent/HANDOFF.md) for validation, IPA build status,
+relay deployment and one-time pairing. The rejected earlier prototype remains
+excluded. Siri and the offline assistant remain future work.
+
 ## Current project state
 
 | Area | Current state |

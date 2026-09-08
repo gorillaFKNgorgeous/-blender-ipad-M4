@@ -8,6 +8,8 @@ on:
       - .github/workflows/build-unsigned-ipa.yml
       - scripts/**
       - patches/**
+      - agent/native/**
+      - agent/runtime/**
       - README.md
   workflow_dispatch:
 
@@ -34,6 +36,9 @@ jobs:
     steps:
       - name: Check out build harness
         uses: actions/checkout@v4
+
+      - name: Validate agent protocol and runtime journal
+        run: python3 -m unittest discover -s agent/tests -v
 
       - name: Select Xcode 26.3 and iOS 26 SDK
         run: |
