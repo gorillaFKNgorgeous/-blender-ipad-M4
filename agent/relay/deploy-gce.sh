@@ -27,7 +27,7 @@ echo "Region:  $REGION"
 echo "VM:      $VM"
 echo "Address: $ADDRESS"
 
-gcloud services enable compute.googleapis.com --project "$PROJECT" >/dev/null
+gcloud services enable compute.googleapis.com iap.googleapis.com --project "$PROJECT" >/dev/null
 
 if ! gcloud compute networks describe "$NETWORK" --project "$PROJECT" >/dev/null 2>&1; then
   gcloud compute networks create "$NETWORK" --project "$PROJECT" --subnet-mode=custom
@@ -46,6 +46,17 @@ if ! gcloud compute firewall-rules describe ghostblender-relay-https --project "
     --project "$PROJECT" \
     --network "$NETWORK" \
     --allow tcp:80,tcp:443 \
+    --target-tags ghostblender-relay
+fi
+
+# Administration is tunneled through Google IAP. Do not expose SSH to 0.0.0.0/0.
+if ! gcloud compute firewall-rules describe ghostblender-relay-iap-ssh --project "$PROJECT" >/dev/null 2>&1; then
+  gcloud compute firewall-rules create ghostblender-relay-iap-ssh \
+    --project "$PROJECT" \
+    --network "$NETWORK" \
+    --direction INGRESS \
+    --allow tcp:22 \
+    --source-ranges 35.235.240.0/20 \
     --target-tags ghostblender-relay
 fi
 
@@ -112,9 +123,9 @@ else
   fi
 fi
 
-# Wait for SSH and the startup package install.
+# Wait for SSH through IAP and the startup package install.
 for _ in {1..60}; do
-  if gcloud compute ssh "$VM" --project "$PROJECT" --zone "$ZONE" --quiet \
+  if gcloud compute ssh "$VM" --project "$PROJECT" --zone "$ZONE" --quiet --tunnel-through-iap \
       --command 'test -f /var/lib/ghostblender-relay-ready && command -v docker-compose >/dev/null' \
       >/dev/null 2>&1; then
     break
@@ -122,7 +133,7 @@ for _ in {1..60}; do
   sleep 5
 done
 
-gcloud compute ssh "$VM" --project "$PROJECT" --zone "$ZONE" --quiet \
+gcloud compute ssh "$VM" --project "$PROJECT" --zone "$ZONE" --quiet --tunnel-through-iap \
   --command 'test -f /var/lib/ghostblender-relay-ready && command -v docker-compose >/dev/null'
 
 IP="$(gcloud compute instances describe "$VM" --project "$PROJECT" --zone "$ZONE" \
@@ -172,9 +183,9 @@ sudo docker-compose up -d --build
 REMOTE
 
 gcloud compute scp "$remote_script" "$VM:/tmp/ghostblender-deploy.sh" \
-  --project "$PROJECT" --zone "$ZONE" --quiet >/dev/null
+  --project "$PROJECT" --zone "$ZONE" --quiet --tunnel-through-iap >/dev/null
 rm -f "$remote_script"
-gcloud compute ssh "$VM" --project "$PROJECT" --zone "$ZONE" --quiet \
+gcloud compute ssh "$VM" --project "$PROJECT" --zone "$ZONE" --quiet --tunnel-through-iap \
   --command 'bash /tmp/ghostblender-deploy.sh && rm -f /tmp/ghostblender-deploy.sh'
 
 # Caddy needs a short window to complete ACME certificate issuance.
@@ -189,7 +200,7 @@ done
 if [[ "$healthy" != 1 ]]; then
   echo "Relay containers started, but HTTPS health did not become ready." >&2
   echo "Inspect with:" >&2
-  echo "  gcloud compute ssh $VM --zone $ZONE --command 'cd ~/ghostblender/agent/relay && sudo docker-compose logs --tail=120'" >&2
+  echo "  gcloud compute ssh $VM --zone $ZONE --tunnel-through-iap --command 'cd ~/ghostblender/agent/relay && sudo docker-compose logs --tail=120'" >&2
   exit 1
 fi
 
@@ -198,7 +209,7 @@ echo "GhostBlender relay is live: $ORIGIN"
 echo "Health: $ORIGIN/health"
 echo
 echo "To reveal the one-time values you must enter into GhostBlender / ChatGPT, run:"
-echo "  gcloud compute ssh $VM --zone $ZONE --command \"cd ~/ghostblender/agent/relay && grep -E '^(PUBLIC_ORIGIN|DEVICE_ID|DEVICE_TOKEN|OAUTH_CLIENT_ID|OAUTH_CLIENT_SECRET|OWNER_KEY)=' .env\""
+echo "  gcloud compute ssh $VM --zone $ZONE --tunnel-through-iap --command \"cd ~/ghostblender/agent/relay && grep -E '^(PUBLIC_ORIGIN|DEVICE_ID|DEVICE_TOKEN|OAUTH_CLIENT_ID|OAUTH_CLIENT_SECRET|OWNER_KEY)=' .env\""
 echo
 echo "Do not paste those secret values into GitHub or this chat."
 echo "For a NEW ChatGPT developer-mode app, ChatGPT will display the exact redirect URI in app management."
