@@ -5,3 +5,10 @@ artifacts/
 *.xcarchive
 *.log
 
+
+# Agent local state and credentials
+__pycache__/
+*.pyc
+agent/relay/.env
+agent/relay/*.sqlite*
+agent/relay/credentials.json

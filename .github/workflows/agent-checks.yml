@@ -1,0 +1,38 @@
+name: Validate GhostBlender agent bridge
+on:
+  push:
+    branches: [main]
+    paths:
+      - agent/**
+      - scripts/apply-ios-agent-bridge.py
+      - .github/workflows/agent-checks.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  protocol:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: python -m unittest discover -s agent/tests -v
+      - run: python -m pip install 'mcp==1.26.0'
+      - run: python agent/tests/sdk_smoke.py
+  native-syntax:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Compile native transport against iOS SDK
+        shell: bash
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.3.app/Contents/Developer
+          sdk_path="$(xcrun --sdk iphoneos --show-sdk-path)"
+          python_include="$(python3 -c 'import sysconfig; print(sysconfig.get_path("include"))')"
+          xcrun --sdk iphoneos clang++ -fsyntax-only -std=c++17 -fobjc-arc \
+            -target arm64-apple-ios26.0 -isysroot "$sdk_path" -I "$python_include" \
+            agent/native/ghostbridge_transport.mm
