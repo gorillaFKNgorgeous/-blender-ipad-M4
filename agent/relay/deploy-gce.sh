@@ -159,23 +159,23 @@ echo "Relay origin: $ORIGIN"
 remote_script="$(mktemp)"
 cat >"$remote_script" <<REMOTE
 set -Eeuo pipefail
-if [[ ! -d \"\$HOME/ghostblender/.git\" ]]; then
-  git clone --depth 1 "$REPO" \"\$HOME/ghostblender\"
+if [[ ! -d "\$HOME/ghostblender/.git" ]]; then
+  git clone --depth 1 "$REPO" "\$HOME/ghostblender"
 else
-  git -C \"\$HOME/ghostblender\" fetch --depth 1 origin main
-  git -C \"\$HOME/ghostblender\" checkout main
-  git -C \"\$HOME/ghostblender\" reset --hard origin/main
+  git -C "\$HOME/ghostblender" fetch --depth 1 origin main
+  git -C "\$HOME/ghostblender" checkout main
+  git -C "\$HOME/ghostblender" reset --hard origin/main
 fi
-cd \"\$HOME/ghostblender/agent/relay\"
+cd "\$HOME/ghostblender/agent/relay"
 if [[ ! -f .env ]]; then
   python3 configure.py \
     --origin "$ORIGIN" \
     --redirect-uri "$LEGACY_REDIRECT"
 else
-  existing_origin=\"\$(sed -n 's/^PUBLIC_ORIGIN=//p' .env)\"
-  if [[ \"\$existing_origin\" != "$ORIGIN" ]]; then
-    echo \"Existing relay credentials belong to \$existing_origin, but this VM now resolves to $ORIGIN.\" >&2
-    echo \"Do not silently replace credentials. Update the origin/redirect allowlist deliberately.\" >&2
+  existing_origin="\$(sed -n 's/^PUBLIC_ORIGIN=//p' .env)"
+  if [[ "\$existing_origin" != "$ORIGIN" ]]; then
+    echo "Existing relay credentials belong to \$existing_origin, but this VM now resolves to $ORIGIN." >&2
+    echo "Do not silently replace credentials. Update the origin/redirect allowlist deliberately." >&2
     exit 1
   fi
 fi
