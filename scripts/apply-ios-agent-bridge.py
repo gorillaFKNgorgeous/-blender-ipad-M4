@@ -27,8 +27,23 @@ def transform(root: Path, harness: Path):
   list(APPEND SRC ghostbridge_transport.mm)
   add_definitions(-DWITH_GHOSTBRIDGE_IOS)
   set_source_files_properties(ghostbridge_transport.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
-  find_library(GHOSTBRIDGE_FOUNDATION Foundation REQUIRED)
-  find_library(GHOSTBRIDGE_UIKIT UIKit REQUIRED)
+  # Blender's cross-platform setup currently points CMAKE_SYSTEM_FRAMEWORK_PATH at
+  # the platform directory rather than the selected iPhoneOS SDK. Resolve these
+  # two bridge-only system frameworks explicitly inside CMAKE_OSX_SYSROOT so the
+  # rest of Blender's dependency search behavior remains untouched.
+  set(GHOSTBRIDGE_IOS_FRAMEWORKS "${CMAKE_OSX_SYSROOT}/System/Library/Frameworks")
+  find_library(GHOSTBRIDGE_FOUNDATION
+    NAMES Foundation
+    PATHS "${GHOSTBRIDGE_IOS_FRAMEWORKS}"
+    NO_DEFAULT_PATH
+    REQUIRED
+  )
+  find_library(GHOSTBRIDGE_UIKIT
+    NAMES UIKit
+    PATHS "${GHOSTBRIDGE_IOS_FRAMEWORKS}"
+    NO_DEFAULT_PATH
+    REQUIRED
+  )
   list(APPEND LIB ${GHOSTBRIDGE_FOUNDATION} ${GHOSTBRIDGE_UIKIT})
 endif()
 
