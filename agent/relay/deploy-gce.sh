@@ -11,6 +11,7 @@ ZONE="${GHOSTBLENDER_ZONE:-us-west1-b}"
 REGION="${ZONE%-*}"
 NETWORK="${GHOSTBLENDER_NETWORK:-ghostblender-net}"
 SUBNET="${GHOSTBLENDER_SUBNET:-ghostblender-relay-${REGION}}"
+ADDRESS="${GHOSTBLENDER_ADDRESS:-ghostblender-relay-ip}"
 REPO="https://github.com/gorillaFKNgorgeous/-blender-ipad-M4.git"
 LEGACY_REDIRECT="https://chatgpt.com/connector_platform_oauth_redirect"
 
@@ -24,6 +25,7 @@ fi
 echo "Project: $PROJECT"
 echo "Region:  $REGION"
 echo "VM:      $VM"
+echo "Address: $ADDRESS"
 
 gcloud services enable compute.googleapis.com --project "$PROJECT" >/dev/null
 
@@ -47,7 +49,39 @@ if ! gcloud compute firewall-rules describe ghostblender-relay-https --project "
     --target-tags ghostblender-relay
 fi
 
-if ! gcloud compute instances describe "$VM" --project "$PROJECT" --zone "$ZONE" >/dev/null 2>&1; then
+instance_exists=0
+if gcloud compute instances describe "$VM" --project "$PROJECT" --zone "$ZONE" >/dev/null 2>&1; then
+  instance_exists=1
+fi
+
+# The relay origin is part of OAuth metadata and the device pairing. Keep it
+# stable across VM stops/restarts by reserving a regional static external IPv4.
+if ! gcloud compute addresses describe "$ADDRESS" --project "$PROJECT" --region "$REGION" >/dev/null 2>&1; then
+  if [[ "$instance_exists" == 1 ]]; then
+    existing_ip="$(gcloud compute instances describe "$VM" --project "$PROJECT" --zone "$ZONE" \
+      --format='get(networkInterfaces[0].accessConfigs[0].natIP)')"
+    if [[ -z "$existing_ip" ]]; then
+      echo "Existing VM has no external IPv4 address to promote." >&2
+      exit 1
+    fi
+    gcloud compute addresses create "$ADDRESS" \
+      --project "$PROJECT" \
+      --region "$REGION" \
+      --addresses "$existing_ip"
+  else
+    gcloud compute addresses create "$ADDRESS" \
+      --project "$PROJECT" \
+      --region "$REGION"
+  fi
+fi
+
+STATIC_IP="$(gcloud compute addresses describe "$ADDRESS" --project "$PROJECT" --region "$REGION" --format='get(address)')"
+if [[ -z "$STATIC_IP" ]]; then
+  echo "Static external IPv4 reservation has no address." >&2
+  exit 1
+fi
+
+if [[ "$instance_exists" == 0 ]]; then
   startup_script="$(mktemp)"
   cat >"$startup_script" <<'STARTUP'
 #!/usr/bin/env bash
@@ -63,7 +97,7 @@ STARTUP
     --project "$PROJECT" \
     --zone "$ZONE" \
     --machine-type e2-micro \
-    --network-interface "subnet=$SUBNET" \
+    --network-interface "subnet=$SUBNET,address=$STATIC_IP" \
     --image-family debian-12 \
     --image-project debian-cloud \
     --boot-disk-type pd-standard \
@@ -97,10 +131,15 @@ if [[ -z "$IP" ]]; then
   echo "The VM has no external IPv4 address." >&2
   exit 1
 fi
+if [[ "$IP" != "$STATIC_IP" ]]; then
+  echo "VM external IP $IP does not match reserved relay IP $STATIC_IP." >&2
+  echo "Refusing to change the public origin automatically. Attach the reserved address deliberately, then rerun." >&2
+  exit 1
+fi
 
 # sslip.io maps an IP embedded in a hostname back to that IP, avoiding the need
-# to purchase a domain for the initial acceptance test. The hostname remains
-# valid while this VM retains its current ephemeral external address.
+# to purchase a domain for the initial acceptance test. Because the IP is now
+# reserved, this HTTPS origin remains stable across ordinary VM stops/restarts.
 HOST="${IP//./-}.sslip.io"
 ORIGIN="https://${HOST}"
 
@@ -162,7 +201,7 @@ echo "To reveal the one-time values you must enter into GhostBlender / ChatGPT, 
 echo "  gcloud compute ssh $VM --zone $ZONE --command \"cd ~/ghostblender/agent/relay && grep -E '^(PUBLIC_ORIGIN|DEVICE_ID|DEVICE_TOKEN|OAUTH_CLIENT_ID|OAUTH_CLIENT_SECRET|OWNER_KEY)=' .env\""
 echo
 echo "Do not paste those secret values into GitHub or this chat."
-echo "For a NEW ChatGPT developer-mode app, ChatGPT will display a callback URL of the form:"
-echo "  https://chatgpt.com/connector/oauth/{callback_id}"
-echo "The relay is initially seeded only with the legacy callback so it can start before that ID exists."
-echo "Once ChatGPT shows the exact callback, add it to OAUTH_REDIRECT_URIS in .env and restart docker-compose before authorizing."
+echo "For a NEW ChatGPT developer-mode app, ChatGPT will display the exact redirect URI in app management."
+echo "The relay is initially seeded with the stable issuer-aware callback:"
+echo "  $LEGACY_REDIRECT"
+echo "If ChatGPT displays a different callback, add that exact URI to OAUTH_REDIRECT_URIS in .env and restart docker-compose before authorizing."
