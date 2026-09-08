@@ -2,5 +2,19 @@
     request_body {
         max_size 3MB
     }
+
+    # ChatGPT opens /authorize as a cross-site browser navigation and may send
+    # Origin: https://chatgpt.com. The relay's own CSRF/origin check is still
+    # desirable for state-changing requests, so strip Origin only for the
+    # initial GET authorization page. The subsequent form POST originates from
+    # this relay and keeps the normal same-origin protection.
+    @oauth_authorize_get {
+        method GET
+        path /authorize
+    }
+    reverse_proxy @oauth_authorize_get relay:8080 {
+        header_up -Origin
+    }
+
     reverse_proxy relay:8080
 }
