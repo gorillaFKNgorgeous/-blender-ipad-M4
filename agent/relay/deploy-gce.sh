@@ -1,0 +1,168 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-or-later
+# Deploy the single-owner GhostBlender relay to a small persistent GCE VM.
+# Intended for Google Cloud Shell. Secrets are generated on the VM and are never
+# written to this repository or echoed by this script.
+
+set -Eeuo pipefail
+
+VM="${GHOSTBLENDER_VM:-ghostblender-relay}"
+ZONE="${GHOSTBLENDER_ZONE:-us-west1-b}"
+REGION="${ZONE%-*}"
+NETWORK="${GHOSTBLENDER_NETWORK:-ghostblender-net}"
+SUBNET="${GHOSTBLENDER_SUBNET:-ghostblender-relay-${REGION}}"
+REPO="https://github.com/gorillaFKNgorgeous/-blender-ipad-M4.git"
+LEGACY_REDIRECT="https://chatgpt.com/connector_platform_oauth_redirect"
+
+PROJECT="${GOOGLE_CLOUD_PROJECT:-$(gcloud config get-value project 2>/dev/null || true)}"
+if [[ -z "$PROJECT" || "$PROJECT" == "(unset)" ]]; then
+  echo "No Google Cloud project is selected." >&2
+  echo "Run: gcloud config set project YOUR_PROJECT_ID" >&2
+  exit 1
+fi
+
+echo "Project: $PROJECT"
+echo "Region:  $REGION"
+echo "VM:      $VM"
+
+gcloud services enable compute.googleapis.com --project "$PROJECT" >/dev/null
+
+if ! gcloud compute networks describe "$NETWORK" --project "$PROJECT" >/dev/null 2>&1; then
+  gcloud compute networks create "$NETWORK" --project "$PROJECT" --subnet-mode=custom
+fi
+
+if ! gcloud compute networks subnets describe "$SUBNET" --project "$PROJECT" --region "$REGION" >/dev/null 2>&1; then
+  gcloud compute networks subnets create "$SUBNET" \
+    --project "$PROJECT" \
+    --region "$REGION" \
+    --network "$NETWORK" \
+    --range 10.42.0.0/24
+fi
+
+if ! gcloud compute firewall-rules describe ghostblender-relay-https --project "$PROJECT" >/dev/null 2>&1; then
+  gcloud compute firewall-rules create ghostblender-relay-https \
+    --project "$PROJECT" \
+    --network "$NETWORK" \
+    --allow tcp:80,tcp:443 \
+    --target-tags ghostblender-relay
+fi
+
+if ! gcloud compute instances describe "$VM" --project "$PROJECT" --zone "$ZONE" >/dev/null 2>&1; then
+  startup_script="$(mktemp)"
+  cat >"$startup_script" <<'STARTUP'
+#!/usr/bin/env bash
+set -eux
+export DEBIAN_FRONTEND=noninteractive
+apt-get update
+apt-get install -y docker.io docker-compose git ca-certificates curl
+systemctl enable --now docker
+touch /var/lib/ghostblender-relay-ready
+STARTUP
+
+  gcloud compute instances create "$VM" \
+    --project "$PROJECT" \
+    --zone "$ZONE" \
+    --machine-type e2-micro \
+    --network-interface "subnet=$SUBNET" \
+    --image-family debian-12 \
+    --image-project debian-cloud \
+    --boot-disk-type pd-standard \
+    --boot-disk-size 10GB \
+    --tags ghostblender-relay \
+    --metadata-from-file startup-script="$startup_script"
+  rm -f "$startup_script"
+else
+  state="$(gcloud compute instances describe "$VM" --project "$PROJECT" --zone "$ZONE" --format='get(status)')"
+  if [[ "$state" != "RUNNING" ]]; then
+    gcloud compute instances start "$VM" --project "$PROJECT" --zone "$ZONE"
+  fi
+fi
+
+# Wait for SSH and the startup package install.
+for _ in {1..60}; do
+  if gcloud compute ssh "$VM" --project "$PROJECT" --zone "$ZONE" --quiet \
+      --command 'test -f /var/lib/ghostblender-relay-ready && command -v docker-compose >/dev/null' \
+      >/dev/null 2>&1; then
+    break
+  fi
+  sleep 5
+done
+
+gcloud compute ssh "$VM" --project "$PROJECT" --zone "$ZONE" --quiet \
+  --command 'test -f /var/lib/ghostblender-relay-ready && command -v docker-compose >/dev/null'
+
+IP="$(gcloud compute instances describe "$VM" --project "$PROJECT" --zone "$ZONE" \
+  --format='get(networkInterfaces[0].accessConfigs[0].natIP)')"
+if [[ -z "$IP" ]]; then
+  echo "The VM has no external IPv4 address." >&2
+  exit 1
+fi
+
+# sslip.io maps an IP embedded in a hostname back to that IP, avoiding the need
+# to purchase a domain for the initial acceptance test. The hostname remains
+# valid while this VM retains its current ephemeral external address.
+HOST="${IP//./-}.sslip.io"
+ORIGIN="https://${HOST}"
+
+echo "Relay origin: $ORIGIN"
+
+remote_script="$(mktemp)"
+cat >"$remote_script" <<REMOTE
+set -Eeuo pipefail
+if [[ ! -d \"\$HOME/ghostblender/.git\" ]]; then
+  git clone --depth 1 "$REPO" \"\$HOME/ghostblender\"
+else
+  git -C \"\$HOME/ghostblender\" fetch --depth 1 origin main
+  git -C \"\$HOME/ghostblender\" checkout main
+  git -C \"\$HOME/ghostblender\" reset --hard origin/main
+fi
+cd \"\$HOME/ghostblender/agent/relay\"
+if [[ ! -f .env ]]; then
+  python3 configure.py \
+    --origin "$ORIGIN" \
+    --redirect-uri "$LEGACY_REDIRECT"
+else
+  existing_origin=\"\$(sed -n 's/^PUBLIC_ORIGIN=//p' .env)\"
+  if [[ \"\$existing_origin\" != "$ORIGIN" ]]; then
+    echo \"Existing relay credentials belong to \$existing_origin, but this VM now resolves to $ORIGIN.\" >&2
+    echo \"Do not silently replace credentials. Update the origin/redirect allowlist deliberately.\" >&2
+    exit 1
+  fi
+fi
+sudo docker-compose up -d --build
+REMOTE
+
+gcloud compute scp "$remote_script" "$VM:/tmp/ghostblender-deploy.sh" \
+  --project "$PROJECT" --zone "$ZONE" --quiet >/dev/null
+rm -f "$remote_script"
+gcloud compute ssh "$VM" --project "$PROJECT" --zone "$ZONE" --quiet \
+  --command 'bash /tmp/ghostblender-deploy.sh && rm -f /tmp/ghostblender-deploy.sh'
+
+# Caddy needs a short window to complete ACME certificate issuance.
+healthy=0
+for _ in {1..36}; do
+  if curl -fsS --max-time 5 "$ORIGIN/health" >/dev/null 2>&1; then
+    healthy=1
+    break
+  fi
+  sleep 5
+done
+if [[ "$healthy" != 1 ]]; then
+  echo "Relay containers started, but HTTPS health did not become ready." >&2
+  echo "Inspect with:" >&2
+  echo "  gcloud compute ssh $VM --zone $ZONE --command 'cd ~/ghostblender/agent/relay && sudo docker-compose logs --tail=120'" >&2
+  exit 1
+fi
+
+echo
+echo "GhostBlender relay is live: $ORIGIN"
+echo "Health: $ORIGIN/health"
+echo
+echo "To reveal the one-time values you must enter into GhostBlender / ChatGPT, run:"
+echo "  gcloud compute ssh $VM --zone $ZONE --command \"cd ~/ghostblender/agent/relay && grep -E '^(PUBLIC_ORIGIN|DEVICE_ID|DEVICE_TOKEN|OAUTH_CLIENT_ID|OAUTH_CLIENT_SECRET|OWNER_KEY)=' .env\""
+echo
+echo "Do not paste those secret values into GitHub or this chat."
+echo "For a NEW ChatGPT developer-mode app, ChatGPT will display a callback URL of the form:"
+echo "  https://chatgpt.com/connector/oauth/{callback_id}"
+echo "The relay is initially seeded only with the legacy callback so it can start before that ID exists."
+echo "Once ChatGPT shows the exact callback, add it to OAUTH_REDIRECT_URIS in .env and restart docker-compose before authorizing."
