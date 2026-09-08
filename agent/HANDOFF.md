@@ -1,8 +1,9 @@
 # GhostBlender live MCP — resume here
 
-Updated 2026-09-08. **Implementation and initial validation complete; live device
-connection still unverified.** Do not restart this work or restore the old MCP
-prototype. Read this file and `agent/README.md`, then inspect the current CI run.
+Updated 2026-09-09. **Build 86 is green and the native bridge is now verified on the
+physical iPad. End-to-end relay/ChatGPT connection remains unverified.** Do not
+restart this work or restore the old MCP prototype. Read this file and
+`agent/README.md`, then continue from relay deployment/pairing.
 
 ## Goal and project constraints
 
@@ -17,8 +18,10 @@ necessary; the intended steady state has no manual code/log transfer.
 - Initial main: bb977ea0a16d0f09942ca04b5b59270042c46461.
 - Initial durable checklist: abca12cb5e2cb5342b401d71bc09e686bd9434b5.
 - Initial implementation: 90e9416f7c5a0cf44443fe2eb3d33aafc866c770.
-- Final integration commit/build: inspect latest main and update the run record below.
-- Installed working baseline is build 81, not this new code.
+- Final integration commit: 1b70fac63ff2c45a3878f3adecfba2b806c6cecf.
+- Framework-resolution fix / successful build 86 commit: 4a2c008d424b13972b060ce7f6dbd430234fe33f.
+- Installed physical-device bridge proof is build 86; build 81 remains the prior
+  owner-confirmed baseline for normal save/file behavior.
 - Blender source pin: 2bc556e58e82eb3a801895f2cb1881c0267e5cd5.
 - CPython 3.13.13, Xcode 26.3, iPad Pro M4 16 GB; existing Signulous signing route.
 - Scene partial library-write crash is unresolved. Never use Scene partial writes
@@ -45,6 +48,10 @@ necessary; the intended steady state has no manual code/log transfer.
   refresh tokens. Correct tool annotations and MCP image content.
 - `agent/relay/{Dockerfile,compose.yml,Caddyfile,configure.py}`: HTTPS + persistent
   Docker volume deployment; credentials generated locally, never committed.
+- `agent/relay/deploy-gce.sh`: Cloud Shell helper for a single persistent GCE relay
+  host; secrets are generated on the VM and are not committed or echoed.
+- `agent/relay/set-chatgpt-redirect.py`: safely adds the exact ChatGPT OAuth callback
+  displayed by app management to the private relay allowlist.
 - `scripts/apply-ios-agent-bridge.py`: validates exact pinned source anchors,
   adds native file/CMake frameworks/built-in registration and startup package.
 - `scripts/prepare-source.sh`: invokes the transform after existing transforms.
@@ -60,6 +67,19 @@ necessary; the intended steady state has no manual code/log transfer.
   - Actual iOS SDK Objective-C++ syntax compilation passed (job 102051223490).
   - Official MCP Python client 1.26.0 initialization, tool discovery and call passed
     (job 102051223883). Production server does not depend on that package.
+- Full IPA build 86 green: https://github.com/gorillaFKNgorgeous/-blender-ipad-M4/actions/runs/34229150516
+  - Agent validation, source preparation, full Blender CMake configure, application
+    build, Python.framework embedding and both IPA packages completed successfully.
+  - This supersedes build 85's narrow CMake `Foundation` lookup failure.
+- Physical iPad, build 86: GhostBlender → Agent Connection panel is visible in the
+  3D View sidebar, proving the bundled startup runtime registered on-device.
+- Physical iPad native transport import also succeeds. User executed:
+  `import _ghostbridge_transport as gb; print(gb.status())`
+  and received `foreground=True`, `available_memory_bytes=4792465872`,
+  `physical_footprint_bytes=1649985072`.
+  The two byte values sum exactly to 6 GiB (6442450944 bytes). Treat this as strong
+  evidence of an approximately 6 GiB current process memory budget for this
+  Signulous-installed profile, not as a guaranteed fixed jetsam threshold.
 - Latest local behavior suite: 17 passed. Covers duplicate prevention, lost
   acknowledgements, persisted issued jobs, app restart journal/outbox, scene changes
   including in-file scene switching, expiry/uncertain outcomes, offline device,
@@ -72,8 +92,9 @@ necessary; the intended steady state has no manual code/log transfer.
   scripts directory, including the new startup package.
 - Python compilation, shell syntax and git diff whitespace checks passed.
 
-These tests do not prove physical-device screenshots, actual scene execution,
-network foreground transitions, or a successfully linked/installed IPA.
+These checks now prove the native module and startup UI load on a physical device.
+They still do not prove live relay connectivity, remote scene execution/capture,
+network foreground transitions or a completed ChatGPT OAuth/MCP round trip.
 
 ## Required next actions
 
@@ -81,29 +102,26 @@ network foreground transitions, or a successfully linked/installed IPA.
 - [x] Implement device runtime, authenticated relay and deployment configuration.
 - [x] Validate protocol, journal and source-transform logic.
 - [x] Pass initial iOS SDK syntax and independent official MCP-client CI checks.
-- [ ] Inspect the final integration CI / full IPA build result; fix actual failures.
-- [ ] Select and access a persistent HTTPS host. No hosting account/domain was
-      provisioned and no service/API/model spending was started. Do not run this
+- [x] Pass full integration IPA build 86.
+- [x] Install build 86 on the physical iPad and verify native bridge load/status.
+- [ ] Create/select a Google Cloud project (or another persistent HTTPS host) and
+      deploy the single-process relay with durable storage. Do not run the current
       SQLite relay on ephemeral Cloud Run/Functions storage or multiple replicas.
-      Existing Google Cloud services are mentioned in project history, but no
-      authenticated Google Cloud deployment capability is available in this turn.
-      A serverless host needs a durable shared backend adaptation.
-- [ ] Deploy with a durable volume and generate distinct credentials using
-      `configure.py`. Verify endpoint authentication before pairing the iPad.
-- [ ] Install the new Signulous-profile IPA on the physical iPad.
-- [ ] Pair via GhostBlender → Agent Connection, then create/authorize the ChatGPT
-      developer app for /mcp using static OAuth credentials. The exact displayed
-      ChatGPT redirect must match the allowlist. Issuer identification is supported.
-- [ ] Execute the acceptance sequence in agent/README.md: inspect → edit → capture
-      → refine, scripts, error diagnostics, scene switch, network drop/reconnect,
-      app reopen, suspension, normal Files behavior. Record actual evidence.
+- [ ] Generate distinct credentials using `configure.py`; verify `/health` and
+      endpoint authentication before pairing the iPad.
+- [ ] Pair via GhostBlender → Agent Connection and confirm `Connected` state.
+- [ ] Create/authorize the ChatGPT developer app for `/mcp` using static OAuth
+      credentials. Add the exact callback shown by ChatGPT to the relay allowlist.
+- [ ] Execute the acceptance sequence in agent/README.md: status → inspect → edit →
+      capture → refine, scripts, error diagnostics, scene switch, network
+      drop/reconnect, app reopen, suspension and normal Files behavior. Record evidence.
 
 The currently running ChatGPT session has no GhostBlender MCP tool registered.
-Do not claim live access, successful on-device images, automatic IPA installation,
-or background autonomy until those are observed. The bridge can persist, but
-active model work still follows client run/usage/approval limits. iPadOS can
-suspend an inactive app. Native Blender calls cannot be forcibly cancelled; a
-failed/uncertain edit may have changed the scene and must be inspected before retry.
+Do not claim live remote access, successful remote images or background autonomy
+until those are observed. The bridge can persist, but active model work still
+follows client run/usage/approval limits. iPadOS can suspend an inactive app.
+Native Blender calls cannot be forcibly cancelled; a failed/uncertain edit may
+have changed the scene and must be inspected before retry.
 
 ## Relevant current documentation
 
@@ -121,5 +139,10 @@ failed/uncertain edit may have changed the scene and must be inspected before re
 
 ## Run record
 
-Initial validation passed. Final integration build record will be appended once
-GitHub assigns the run ID. Refresh GitHub before reporting its status.
+- Build 85: failed during CMake configure because bridge-specific `find_library`
+  calls could not resolve Foundation/UIKit under the iOS cross-compile root path.
+- Build 86: green at commit `4a2c008d424b13972b060ce7f6dbd430234fe33f`,
+  Actions run `34229150516`.
+- Physical-device verification, 2026-09-09: Agent Connection UI present;
+  `_ghostbridge_transport.status()` succeeded with foreground state and real memory
+  telemetry. End-to-end MCP relay/ChatGPT pairing remains the next milestone.
