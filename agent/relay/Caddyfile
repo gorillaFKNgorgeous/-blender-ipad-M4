@@ -3,17 +3,26 @@
         max_size 3MB
     }
 
-    # ChatGPT's OAuth browser flow may preserve Origin: https://chatgpt.com on
-    # both the initial authorization navigation and the owner-consent form POST.
-    # Strip Origin only for /authorize. The authorization request itself is
-    # still bound to the pre-registered client, exact redirect URI, resource,
-    # S256 PKCE challenge, a short-lived one-time ticket, and the owner key.
-    @oauth_authorize {
-        path /authorize
+    # Private-development MCP entrypoint. ChatGPT is configured with
+    # "No Authentication" but only receives this long capability URL. Caddy
+    # rewrites it to the relay's internal /mcp endpoint. The ordinary /mcp path
+    # is deliberately blocked from the public internet.
+    @private_mcp {
+        path /mcp/{$AGENT_TOKEN}
     }
-    reverse_proxy @oauth_authorize relay:8080 {
-        header_up -Origin
+    handle @private_mcp {
+        rewrite * /mcp
+        reverse_proxy relay:8080
     }
 
-    reverse_proxy relay:8080
+    @blocked_mcp {
+        path /mcp
+    }
+    respond @blocked_mcp 404
+
+    # Device exchange, health, and legacy OAuth endpoints remain available.
+    # OAuth is no longer required for the private ChatGPT development app.
+    handle {
+        reverse_proxy relay:8080
+    }
 }
