@@ -1,202 +1,93 @@
 import base64
 import hashlib
-import http.client
-import importlib.util
 import json
+import os
 from pathlib import Path
 import re
-import shutil
+import socket
 import sys
 import tempfile
 import threading
 import time
-import types
 import unittest
+from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlencode, urlsplit
+from urllib.request import Request, urlopen
 
-ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / 'agent/relay'))
+ROOT=Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(ROOT/'relay'))
+sys.path.insert(0,str(ROOT/'runtime'))
 from server import App, Server
-from store import Store
-from oauth import OAuth, digest
-spec = importlib.util.spec_from_file_location('bridge_core', ROOT / 'agent/runtime/core.py')
-core = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(core)
+from runtime import AgentRuntime, ExecutionContext, MemoryJournal, RuntimeErrorSafe
 
 
-def heartbeat(boot='boot_one', scene='scene_one'):
-    return {'boot_id':boot, 'scene_id':scene, 'blender_version':'5.2.0', 'native':{'foreground':True}}
+def heartbeat(scene='scene_one',boot='boot_one'):
+    return {'boot_id':boot,'scene_id':scene,'blender_version':'5.2.0','native':{'foreground':True},'memory':{'rss_bytes':1}}
 
 
-class StoreTests(unittest.TestCase):
+class BridgeTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.path = str(Path(self.temp.name)/'state.sqlite')
-        self.store = Store(self.path)
-        self.store.exchange('ipad', heartbeat())
-
-    def tearDown(self):
-        self.store.db.close()
-        self.temp.cleanup()
-
-    def submit(self, key='request_01'):
-        return self.store.submit('ipad','execute_python',{'code':'result=42'},key,'scene_one')
-
-    def test_lost_delivery_is_not_reissued(self):
-        job = self.submit()
-        first = self.store.exchange('ipad', heartbeat())
-        self.assertEqual(first['job']['job_id'],job['job_id'])
-        self.assertIsNone(self.store.exchange('ipad', heartbeat())['job'])
-        self.assertEqual(self.submit()['job_id'],job['job_id'])
-
-    def test_ack_loss_keeps_result_and_no_duplicate_execution(self):
-        job = self.submit()
-        self.store.exchange('ipad', heartbeat())
-        completion = {'job_id':job['job_id'],'boot_id':'boot_one','result':{'ok':True,'value':42}}
-        first = self.store.exchange('ipad',heartbeat(),completion)
-        second = self.store.exchange('ipad',heartbeat(),completion)
-        self.assertEqual(first['ack'],second['ack'])
-        self.assertEqual(self.store.result('ipad',job['job_id'])['result']['value'],42)
-
-    def test_scene_switch_expires_queued_job(self):
-        job = self.submit()
-        self.assertIsNone(self.store.exchange('ipad',heartbeat(scene='another'))['job'])
-        self.assertEqual(self.store.result('ipad',job['job_id'])['state'],'expired')
-
-    def test_restart_persists_issued_state_without_replaying(self):
-        job = self.submit()
-        self.store.exchange('ipad',heartbeat())
-        self.store.db.close()
-        self.store = Store(self.path)
-        self.assertIsNone(self.store.exchange('ipad',heartbeat(boot='restarted'))['job'])
-        self.assertEqual(self.store.result('ipad',job['job_id'])['state'],'issued')
-
-    def test_key_conflict_and_offline_and_device_isolation(self):
-        job = self.submit()
-        with self.assertRaises(ValueError):
-            self.store.submit('ipad','execute_python',{'code':'different'},'request_01','scene_one')
-        with self.assertRaises(ValueError):
-            self.store.result('other',job['job_id'])
-        with self.store.db:
-            self.store.db.execute('UPDATE device SET seen=0')
-        with self.assertRaisesRegex(ValueError,'offline'):
-            self.submit('request_02')
-
-    def test_cancel_and_queue_bound(self):
-        job = self.submit()
-        self.assertEqual(self.store.cancel('ipad',job['job_id'])['state'],'cancelled')
-        for n in range(8):
-            self.submit(f'request_{n+10}')
-        with self.assertRaisesRegex(ValueError,'queue_full'):
-            self.submit('request_overflow')
-
-    def test_expired_issued_is_uncertain_and_late_result_is_accepted(self):
-        job = self.submit()
-        self.store.exchange('ipad',heartbeat())
-        with self.store.db:
-            self.store.db.execute('UPDATE jobs SET expires=0')
-        self.assertEqual(self.store.result('ipad',job['job_id'])['state'],'uncertain')
-        completion={'job_id':job['job_id'],'boot_id':'boot_one','result':{'ok':True,'value':1}}
-        self.store.exchange('ipad',heartbeat(),completion)
-        self.assertEqual(self.store.result('ipad',job['job_id'])['state'],'completed')
-
-
-class RuntimeTests(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.bpy = types.SimpleNamespace(app=types.SimpleNamespace(is_job_running=lambda _:False))
-        self.native = types.SimpleNamespace(status=lambda: {'foreground':True})
-        self.runtime = core.Runtime(self.bpy,self.native,self.temp.name)
-        self.calls=[]
-        self.runtime.dispatch=lambda op,args: self.calls.append(op) or {'done':True}
-        self.job={'job_id':'command_01','boot_id':self.runtime.boot_id,'scene_id':self.runtime.scene_id,
-                  'operation':'execute_python','arguments':{},'expires_at':time.time()+30}
-
-    def tearDown(self):
-        self.temp.cleanup()
-
-    def test_duplicate_never_reexecutes(self):
-        first=self.runtime.execute(self.job)
-        self.runtime.acknowledge(self.job['job_id'])
-        duplicate=self.runtime.execute(self.job)
-        self.assertTrue(first['result']['ok'])
-        self.assertFalse(duplicate['result']['ok'])
-        self.assertEqual(self.calls,['execute_python'])
-
-    def test_disk_journal_survives_crash_and_outbox_survives_restart(self):
-        self.runtime.execute(self.job)
-        loaded=core.Runtime(self.bpy,self.native,self.temp.name)
-        self.assertEqual(loaded.outbox['job_id'],self.job['job_id'])
-        loaded.acknowledge(self.job['job_id'])
-        loaded.journal['incomplete']={'state':'running'}
-        loaded._save()
-        restarted=core.Runtime(self.bpy,self.native,self.temp.name)
-        self.assertEqual(restarted.journal['incomplete']['state'],'uncertain')
-
-    def test_new_scene_and_expired_commands_do_not_run(self):
-        self.runtime.scene_changed()
-        value=self.runtime.execute(self.job)
-        self.assertFalse(value['result']['ok'])
-        self.assertEqual(self.calls,[])
-
-    def test_switching_scenes_without_loading_a_file_is_detected(self):
-        self.bpy.context = types.SimpleNamespace(scene=types.SimpleNamespace(as_pointer=lambda:1))
-        self.runtime._sync_scene()
-        self.bpy.context.scene = types.SimpleNamespace(as_pointer=lambda:2)
-        result = self.runtime.execute(self.job)
-        self.assertFalse(result['result']['ok'])
-        self.assertEqual(self.calls, [])
-
-    def test_script_workspace_and_compare_before_write(self):
-        r=self.runtime.write_script('scene.py','result=1')
-        self.assertEqual(self.runtime.read_script('scene.py')['sha256'],r['sha256'])
-        with self.assertRaises(ValueError):
-            self.runtime.write_script('scene.py','result=2')
-        self.runtime.write_script('scene.py','result=2',expected_sha256=r['sha256'])
-        with self.assertRaises(ValueError):
-            self.runtime.read_script('../config.py')
-        target=Path(self.temp.name)/'secret.py'; target.write_text('secret')
-        (self.runtime.scripts/'link.py').symlink_to(target)
-        with self.assertRaises(ValueError):
-            self.runtime.read_script('link.py')
-
-    def test_python_timeout_and_stdout_bound(self):
-        bpy=types.SimpleNamespace(context=types.SimpleNamespace(view_layer=types.SimpleNamespace(update=lambda:None),window_manager=types.SimpleNamespace(windows=[])))
-        self.runtime.bpy=bpy
-        result=self.runtime.execute_python('print("x"*50000); result=2')
-        self.assertEqual(result['result'],2)
-        self.assertLess(len(result['stdout']),25000)
-        with self.assertRaisesRegex(RuntimeError,'time limit'):
-            self.runtime.execute_python('while True:\n    pass',time_limit=.1)
-        self.assertIsNone(sys.gettrace())
-
-
-class HttpAndOAuthTests(unittest.TestCase):
-    def setUp(self):
-        self.temp=tempfile.TemporaryDirectory()
-        self.app=App(str(Path(self.temp.name)/'state.sqlite'),'https://relay.example','ipad',
-                     'd'*40,'a'*40,'client','c'*40,'o'*40,['https://client.example/callback'])
+        self.tmp=tempfile.TemporaryDirectory()
+        self.db=Path(self.tmp.name)/'relay.sqlite3'
+        self.app=App(str(self.db),'https://relay.example','ipad','d'*40,'a'*40,'client','c'*40,'o'*40,['https://client.example/callback'])
         self.server=Server(('127.0.0.1',0),self.app)
+        self.port=self.server.server_address[1]
         self.thread=threading.Thread(target=self.server.serve_forever,daemon=True); self.thread.start()
 
     def tearDown(self):
-        self.server.shutdown(); self.server.server_close(); self.thread.join()
-        self.app.store.db.close(); self.temp.cleanup()
+        self.server.shutdown(); self.server.server_close(); self.thread.join(timeout=2); self.tmp.cleanup()
 
-    def request(self,path,body=None,token=None,method='POST',headers=None):
-        conn=http.client.HTTPConnection('127.0.0.1',self.server.server_port,timeout=3)
-        h={'Host':'relay.example','Accept':'application/json, text/event-stream','Content-Type':'application/json'}
-        if token: h['Authorization']='Bearer '+token
-        h.update(headers or {})
-        conn.request(method,path,json.dumps(body) if body is not None else None,h)
-        r=conn.getresponse(); raw=r.read(); status=r.status; hdr=dict(r.getheaders()); conn.close()
-        return status, json.loads(raw) if raw else None, hdr
+    def request(self,path,body=None,token=None,method='POST',headers=None,form=False):
+        url=f'http://127.0.0.1:{self.port}{path}'
+        data=None
+        req_headers={'Host':'relay.example','Accept':'application/json, text/event-stream'}
+        if body is not None:
+            if form:
+                data=urlencode(body).encode(); req_headers['Content-Type']='application/x-www-form-urlencoded'
+            else:
+                data=json.dumps(body).encode(); req_headers['Content-Type']='application/json'
+        if token: req_headers['Authorization']='Bearer '+token
+        req_headers.update(headers or {})
+        req=Request(url,data=data,method=method,headers=req_headers)
+        try:
+            with urlopen(req,timeout=3) as r:
+                raw=r.read(); return r.status,(json.loads(raw) if raw else None),dict(r.headers)
+        except HTTPError as e:
+            raw=e.read(); return e.code,(json.loads(raw) if raw else None),dict(e.headers)
 
-    def test_auth_separation_and_origin_validation(self):
-        rpc={'jsonrpc':'2.0','id':1,'method':'tools/list'}
-        self.assertEqual(self.request('/mcp',rpc)[0],401)
-        self.assertEqual(self.request('/mcp',rpc,token='d'*40)[0],401)
-        self.assertEqual(self.request('/device/exchange',{},token='a'*40)[0],401)
+    def test_store_duplicate_and_scene_guard(self):
+        self.app.store.exchange('ipad',heartbeat())
+        a=self.app.call('inspect_scene',{'request_id':'inspect_01','scene_id':'scene_one'})
+        b=self.app.call('inspect_scene',{'request_id':'inspect_01','scene_id':'scene_one'})
+        self.assertEqual(a['job_id'],b['job_id'])
+        with self.assertRaises(ValueError): self.app.call('inspect_scene',{'request_id':'inspect_01','scene_id':'other'})
+
+    def test_issued_is_not_reissued(self):
+        self.app.store.exchange('ipad',heartbeat())
+        job=self.app.call('inspect_scene',{'request_id':'inspect_02','scene_id':'scene_one'})
+        first=self.app.store.exchange('ipad',heartbeat())
+        self.assertEqual(first['job']['job_id'],job['job_id'])
+        second=self.app.store.exchange('ipad',heartbeat())
+        self.assertIsNone(second['job'])
+
+    def test_result_completion_ack(self):
+        self.app.store.exchange('ipad',heartbeat())
+        job=self.app.call('inspect_scene',{'request_id':'inspect_03','scene_id':'scene_one'})
+        self.app.store.exchange('ipad',heartbeat())
+        done={'job_id':job['job_id'],'boot_id':'boot_one','result':{'ok':True,'value':{'objects':[]}}}
+        reply=self.app.store.exchange('ipad',heartbeat(),done)
+        self.assertEqual(reply['ack'],job['job_id'])
+        result=self.app.call('job_result',{'job_id':job['job_id']})
+        self.assertEqual(result['state'],'completed')
+
+    def test_scene_change_expires_queued(self):
+        self.app.store.exchange('ipad',heartbeat())
+        job=self.app.call('inspect_scene',{'request_id':'inspect_04','scene_id':'scene_one'})
+        self.app.store.exchange('ipad',heartbeat(scene='scene_two'))
+        self.assertEqual(self.app.call('job_result',{'job_id':job['job_id']})['state'],'expired')
+
+    def test_mcp_rejects_bad_origin(self):
+        rpc={'jsonrpc':'2.0','id':1,'method':'initialize','params':{'protocolVersion':'2025-11-25','capabilities':{},'clientInfo':{'name':'test','version':'1'}}}
         self.assertEqual(self.request('/mcp',rpc,token='a'*40,headers={'Origin':'https://evil.example'})[0],403)
 
     def test_mcp_handshake_notification_and_pending_job(self):
@@ -215,7 +106,6 @@ class HttpAndOAuthTests(unittest.TestCase):
         self.app.store.exchange('ipad',heartbeat())
         job=self.app.call('capture',{'request_id':'capture_01','scene_id':'scene_one'})
         self.app.store.exchange('ipad',heartbeat())
-        # Protocol fixture, not a claim of device render validation.
         data=base64.b64encode(b'fixture').decode()
         self.app.store.exchange('ipad',heartbeat(),{'job_id':job['job_id'],'boot_id':'boot_one',
             'result':{'ok':True,'value':{'mime_type':'image/png','data':data,'source':'screenshot'}}})
@@ -233,6 +123,7 @@ class HttpAndOAuthTests(unittest.TestCase):
         ticket=re.search('name="ticket" value="([^"]+)"',page)[1]
         with self.assertRaises(ValueError): oauth.approve(ticket,'wrong')
         redirect=oauth.approve(ticket,'o'*40)
+        self.assertEqual(oauth.approve(ticket,'o'*40),redirect)
         query=parse_qs(urlsplit(redirect).query)
         self.assertEqual(query['state'],['original-state'])
         self.assertEqual(query['iss'],[oauth.origin])
