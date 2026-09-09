@@ -252,7 +252,9 @@ class Handler(BaseHTTPRequestHandler):
             if auth.startswith('Basic '):
                 raw = base64.b64decode(auth[6:], validate=True).decode()
                 form['client_id'], form['client_secret'] = raw.split(':',1)
-            self.reply(200, app.oauth.token(form))
+            token_reply = app.oauth.token(form)
+            print('oauth_event=token_issued grant=' + form.get('grant_type', 'missing'), flush=True)
+            self.reply(200, token_reply)
         elif path == '/device/exchange' and self.command == 'POST':
             if not self.authorized(device=True):
                 self.close_connection = True
@@ -295,6 +297,9 @@ class Handler(BaseHTTPRequestHandler):
         try:
             self.handle_request()
         except (ValueError, KeyError, TypeError, UnicodeError) as exc:
+            safe_path = urlsplit(self.path).path
+            if safe_path in ('/authorize', '/token', '/mcp'):
+                print(f'oauth_event=request_failed path={safe_path} error={type(exc).__name__}:{str(exc)[:80]}', flush=True)
             self.close_connection = True
             self.reply(400, {'error':str(exc)[:160]})
         except (BrokenPipeError, ConnectionResetError, TimeoutError):
