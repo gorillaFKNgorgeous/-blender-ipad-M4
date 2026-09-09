@@ -251,6 +251,19 @@ class HttpAndOAuthTests(unittest.TestCase):
         self.assertFalse(oauth.authenticate(newer['access_token']))
         with self.assertRaises(ValueError): oauth.authorize_form({**params,'redirect_uri':'https://evil.example'})
 
+    def test_oauth_owner_key_accepts_markdown_escaped_underscores(self):
+        oauth = self.app.oauth
+        params = {'client_id':'client', 'response_type':'code',
+                  'redirect_uri':'https://client.example/callback',
+                  'code_challenge_method':'S256', 'code_challenge':'a'*43,
+                  'resource':oauth.resource, 'scope':'blender'}
+        oauth.owner_key = 'owner_key_with_underscores'
+        oauth.revision = digest(oauth.client_secret + '\n' + oauth.owner_key)
+        page = oauth.authorize_form(params)
+        ticket = re.search(r'name="ticket" value="([^"]+)"', page).group(1)
+        target = oauth.approve(ticket, r'owner\_key\_with\_underscores')
+        self.assertTrue(target.startswith('https://client.example/callback?'))
+
 
 if __name__ == '__main__':
     unittest.main()

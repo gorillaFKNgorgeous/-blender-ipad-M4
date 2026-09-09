@@ -71,6 +71,13 @@ class OAuth:
         # only length and a short SHA-256 fingerprint so browser-vs-server
         # transformation can be diagnosed without returning the secret itself.
         submitted = owner_key.strip() if isinstance(owner_key, str) else owner_key
+        # Some chat/Markdown copy paths expose underscores as ``\_``. Accept
+        # that one presentation-only escape only when the resulting credential
+        # still matches the configured owner key exactly.
+        if isinstance(submitted, str) and not same(submitted, self.owner_key):
+            unescaped = submitted.replace(r'\_', '_')
+            if same(unescaped, self.owner_key):
+                submitted = unescaped
         if not same(submitted, self.owner_key):
             submitted_len = len(submitted) if isinstance(submitted, str) else -1
             raise ValueError(
