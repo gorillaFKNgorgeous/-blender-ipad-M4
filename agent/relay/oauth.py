@@ -39,7 +39,7 @@ class OAuth:
                 'authorization_endpoint': self.origin + '/authorize',
                 'token_endpoint': self.origin + '/token',
                 'response_types_supported': ['code'], 'grant_types_supported': ['authorization_code','refresh_token'],
-                'token_endpoint_auth_methods_supported': ['client_secret_post','client_secret_basic'],
+                'token_endpoint_auth_methods_supported': ['none','client_secret_post','client_secret_basic'],
                 'code_challenge_methods_supported': ['S256'], 'scopes_supported': ['blender']}
 
     def resource_metadata(self):
@@ -114,7 +114,11 @@ class OAuth:
         return target
 
     def token(self, params):
-        if not same(params.get('client_id'), self.client_id) or not same(params.get('client_secret'), self.client_secret):
+        # Authorization-code and refresh grants are bound to this client below;
+        # the code grant is additionally protected by S256 PKCE. Support
+        # ChatGPT as an OAuth public client (`none`) and tolerate a stale static
+        # secret retained by an existing app registration.
+        if not same(params.get('client_id'), self.client_id):
             raise ValueError('invalid_client')
         if params.get('resource') != self.resource:
             raise ValueError('invalid_target')

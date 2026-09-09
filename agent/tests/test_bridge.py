@@ -264,6 +264,25 @@ class HttpAndOAuthTests(unittest.TestCase):
         target = oauth.approve(ticket, r'owner\_key\_with\_underscores')
         self.assertTrue(target.startswith('https://client.example/callback?'))
 
+    def test_oauth_public_client_pkce_exchange(self):
+        oauth = self.app.oauth
+        self.assertIn('none', oauth.metadata()['token_endpoint_auth_methods_supported'])
+        verifier = 'p' * 64
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip('=')
+        params = {'client_id':'client', 'response_type':'code',
+                  'redirect_uri':'https://client.example/callback',
+                  'code_challenge_method':'S256', 'code_challenge':challenge,
+                  'resource':oauth.resource, 'scope':'blender'}
+        page = oauth.authorize_form(params)
+        ticket = re.search(r'name="ticket" value="([^"]+)"', page).group(1)
+        redirect = oauth.approve(ticket, 'o' * 40)
+        code = parse_qs(urlsplit(redirect).query)['code'][0]
+        tokens = oauth.token({'client_id':'client', 'client_secret':'stale-registration-secret',
+                              'resource':oauth.resource, 'grant_type':'authorization_code',
+                              'code':code, 'redirect_uri':params['redirect_uri'],
+                              'code_verifier':verifier})
+        self.assertTrue(oauth.authenticate(tokens['access_token']))
+
 
 if __name__ == '__main__':
     unittest.main()
