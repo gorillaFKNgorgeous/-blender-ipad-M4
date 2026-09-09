@@ -35,7 +35,7 @@ class OAuth:
         self.revision = digest(client_secret + '\n' + owner_key)
 
     def metadata(self):
-        return {'issuer': self.origin, 'authorization_response_iss_parameter_supported': True,
+        return {'issuer': self.origin, 'authorization_response_iss_parameter_supported': False,
                 'authorization_endpoint': self.origin + '/authorize',
                 'token_endpoint': self.origin + '/token',
                 'response_types_supported': ['code'], 'grant_types_supported': ['authorization_code','refresh_token'],
@@ -103,7 +103,10 @@ class OAuth:
         code = secrets.token_urlsafe(32)
         params['revision'] = self.revision
         self.store.put_oauth(digest(code), 'code', params, time.time() + 120)
-        query = {'code': code, 'iss': self.origin}
+        # ChatGPT's legacy connector_platform_oauth_redirect callback expects
+        # the authorization response to contain code/state only. Do not emit
+        # RFC 9207 `iss` when the metadata says issuer responses are disabled.
+        query = {'code': code}
         if 'state' in params:
             query['state'] = params['state']
         target = params['redirect_uri'] + ('&' if '?' in params['redirect_uri'] else '?') + urlencode(query)

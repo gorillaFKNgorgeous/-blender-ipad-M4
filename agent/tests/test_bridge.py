@@ -236,7 +236,8 @@ class HttpAndOAuthTests(unittest.TestCase):
         self.assertEqual(oauth.approve(ticket,'o'*40),redirect)
         query=parse_qs(urlsplit(redirect).query)
         self.assertEqual(query['state'],['original-state'])
-        self.assertEqual(query['iss'],[oauth.origin])
+        self.assertNotIn('iss', query)
+        self.assertFalse(oauth.metadata()['authorization_response_iss_parameter_supported'])
         token_params={'client_id':'client','client_secret':'c'*40,'resource':oauth.resource,
                       'grant_type':'authorization_code','code':query['code'][0],
                       'redirect_uri':params['redirect_uri'],'code_verifier':verifier}
