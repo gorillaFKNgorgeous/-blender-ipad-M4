@@ -7,22 +7,23 @@
     # "No Authentication" but only receives this long capability URL. Caddy
     # rewrites it to the relay's internal /mcp endpoint. The ordinary /mcp path
     # is deliberately blocked from the public internet.
-    @private_mcp {
-        path /mcp/{$AGENT_TOKEN}
-    }
-    handle @private_mcp {
-        rewrite * /mcp
-        reverse_proxy relay:8080
-    }
+    route {
+        @private_mcp path /mcp/{$AGENT_TOKEN}
+        handle @private_mcp {
+            rewrite * /mcp
+            reverse_proxy relay:8080
+        }
 
-    @blocked_mcp {
-        path /mcp
-    }
-    respond @blocked_mcp 404
+        # Block both the ordinary endpoint and every incorrect capability path.
+        @blocked_mcp path /mcp /mcp/*
+        handle @blocked_mcp {
+            respond 404
+        }
 
-    # Device exchange, health, and legacy OAuth endpoints remain available.
-    # OAuth is no longer required for the private ChatGPT development app.
-    handle {
-        reverse_proxy relay:8080
+        # Device exchange, health, and legacy OAuth endpoints remain available.
+        # OAuth is no longer required for the private ChatGPT development app.
+        handle {
+            reverse_proxy relay:8080
+        }
     }
 }
