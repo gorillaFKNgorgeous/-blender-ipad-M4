@@ -60,8 +60,9 @@ class OAuth:
 <title>Connect GhostBlender</title><style>body{{font:18px system-ui;background:#11141b;color:#edf2ff;max-width:34rem;margin:8vh auto;padding:24px}}input,button{{font:inherit;width:100%;box-sizing:border-box;padding:14px;margin:12px 0}}button{{background:#78d7cb;color:#071915;border:0;border-radius:8px}}</style>
 <h1>Connect GhostBlender</h1><p>Allow this agent to inspect the live scene, run Blender Python, capture images, read diagnostics and edit scripts.</p>
 <p>Python access can change your project and app files. You can disconnect the agent inside GhostBlender.</p>
-<form method="post" action="/authorize"><input type="hidden" name="ticket" value="{html.escape(ticket)}">
-<label for="key">Owner connection key</label><input id="key" type="password" name="owner_key" autocomplete="off" required>
+<form method="post" action="/authorize" autocomplete="off"><input type="hidden" name="ticket" value="{html.escape(ticket)}">
+<label for="key">Owner connection key</label><input id="key" type="text" name="owner_key" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" inputmode="text" required>
+<p><small>The key is intentionally shown while entering it so iPad password autofill cannot silently replace the pasted value.</small></p>
 <button type="submit">Authorize connection</button></form></html>'''
 
     def approve(self, ticket, owner_key):
