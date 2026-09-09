@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Bundled startup package: one-time pairing, persistent main-thread dispatcher."""
+import hashlib
 import json
 from pathlib import Path
 import time
@@ -24,8 +25,21 @@ _status = 'Disconnected'
 _root = None
 
 
+def _token_fingerprint(token):
+    if not isinstance(token, str) or not token:
+        return ''
+    return hashlib.sha256(token.encode()).hexdigest()[:12]
+
+
 def _save_config():
-    atomic_json(_root / 'config.json', _config)
+    path = _root / 'config.json'
+    atomic_json(path, _config)
+    # Verify the exact pairing token survived the filesystem write before the UI
+    # reports that the connection was saved. This makes persistence failures
+    # explicit instead of looking like an authentication failure later.
+    saved = json.loads(path.read_text())
+    if saved.get('device_token') != _config.get('device_token'):
+        raise RuntimeError('pairing_token_persistence_failed')
 
 
 def _disconnect():
@@ -60,8 +74,9 @@ def _tick():
                 return 0.15
             _waiting = False
             if response.get('status') in (401, 403):
+                fingerprint = _token_fingerprint(_config.get('device_token', ''))
                 _disconnect()
-                _status = 'Pairing rejected; check device credentials'
+                _status = 'Pairing rejected; saved token sha12=' + (fingerprint or 'missing')
                 return 1.0
             if response.get('status') != 200:
                 raise RuntimeError(response.get('error', 'relay_http_error'))
@@ -124,10 +139,18 @@ class GBConnect(bpy.types.Operator):
         native.cancel()
         _waiting = False
         _config = {'relay_url': url, 'device_id': device_id, 'device_token': token, 'enabled': True}
-        _save_config()
-        settings.device_token = ''
+        try:
+            _save_config()
+        except Exception:
+            _config['enabled'] = False
+            self.report({'ERROR'}, 'Could not persist pairing token in the app sandbox')
+            _status = 'Pairing token persistence failed'
+            return {'CANCELLED'}
+        # Keep the password field populated in memory so the UI visibly reflects
+        # that a token exists. SKIP_SAVE prevents it being written into .blend files.
+        settings.device_token = token
         _next_request = 0.0
-        _status = 'Connecting'
+        _status = 'Connecting; token saved sha12=' + _token_fingerprint(token)
         return {'FINISHED'}
 
 
@@ -150,6 +173,11 @@ class GBPanel(bpy.types.Panel):
         layout = self.layout
         settings = context.window_manager.ghostbridge
         layout.label(text=_status)
+        saved = _config.get('device_token', '')
+        if saved:
+            layout.label(text='Saved device token: sha12=' + _token_fingerprint(saved))
+        else:
+            layout.label(text='Saved device token: none')
         if _config.get('enabled'):
             layout.operator('ghostbridge.disconnect')
         else:
@@ -184,6 +212,7 @@ def register():
             return 0.5
         wm.ghostbridge.relay_url = _config.get('relay_url', '')
         wm.ghostbridge.device_id = _config.get('device_id', 'ipad')
+        wm.ghostbridge.device_token = _config.get('device_token', '')
         return None
     bpy.app.timers.register(fill_settings, first_interval=1.0)
     bpy.app.handlers.load_post.append(_load_post)
