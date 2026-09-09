@@ -6,6 +6,7 @@ Run one process with persistent /data behind an HTTPS reverse proxy. The relay
 never executes Blender code. It stores commands for the authenticated iPad.
 """
 import base64
+import html
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -234,7 +235,17 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/authorize' and self.command == 'POST':
             form = self.body(form=True)
             target = app.oauth.approve(form.get('ticket',''), form.get('owner_key',''))
-            self.reply(303, headers={'Location':target})
+            escaped_target = html.escape(target, quote=True)
+            continuation = f'''<!doctype html><html lang="en"><meta charset="utf-8">
+<meta http-equiv="refresh" content="0;url={escaped_target}">
+<meta name="viewport" content="width=device-width"><title>Continue to ChatGPT</title>
+<style>body{{font:18px system-ui;background:#11141b;color:#edf2ff;max-width:34rem;margin:8vh auto;padding:24px}}a{{color:#78d7cb}}</style>
+<h1>Connection approved</h1><p>Continuing to ChatGPT…</p>
+<p><a href="{escaped_target}">Continue to ChatGPT</a></p></html>'''
+            # Some embedded authorization windows do not follow an empty 303
+            # form response. Return a navigable page with meta-refresh and a
+            # visible fallback link instead.
+            self.reply(200, continuation, html=True)
         elif path == '/token' and self.command == 'POST':
             form = self.body(form=True)
             auth = self.headers.get('Authorization','')
