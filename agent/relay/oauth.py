@@ -78,16 +78,33 @@ class OAuth:
                 f'submitted_len={submitted_len} expected_len={len(self.owner_key)} '
                 f'submitted_sha12={short_digest(submitted)} expected_sha12={short_digest(self.owner_key)}'
             )
-        params = self.store.get_oauth(digest(ticket), 'pending', consume=True)
+
+        ticket_key = digest(ticket)
+
+        # A mobile browser can submit the consent form twice before the first 303
+        # navigation visibly completes. Preserve the successful redirect briefly
+        # so a duplicate submit returns the same authorization response instead of
+        # overwriting it with authorization_expired.
+        approved = self.store.get_oauth(ticket_key, 'approved')
+        if approved and approved.get('revision') == self.revision and isinstance(approved.get('target'), str):
+            return approved['target']
+
+        params = self.store.get_oauth(ticket_key, 'pending')
         if not params:
             raise ValueError('authorization_expired')
+
         code = secrets.token_urlsafe(32)
         params['revision'] = self.revision
         self.store.put_oauth(digest(code), 'code', params, time.time() + 120)
         query = {'code': code, 'iss': self.origin}
         if 'state' in params:
             query['state'] = params['state']
-        return params['redirect_uri'] + ('&' if '?' in params['redirect_uri'] else '?') + urlencode(query)
+        target = params['redirect_uri'] + ('&' if '?' in params['redirect_uri'] else '?') + urlencode(query)
+
+        # Replacing pending with approved makes the ticket one-way while still
+        # allowing an accidental duplicate form POST to replay only the same 303.
+        self.store.put_oauth(ticket_key, 'approved', {'target': target, 'revision': self.revision}, time.time() + 120)
+        return target
 
     def token(self, params):
         if not same(params.get('client_id'), self.client_id) or not same(params.get('client_secret'), self.client_secret):
