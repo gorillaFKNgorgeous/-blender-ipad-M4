@@ -22,6 +22,10 @@ def same(a, b):
     return isinstance(a, str) and isinstance(b, str) and hmac.compare_digest(a.encode(), b.encode())
 
 
+def short_digest(value):
+    return digest(value)[:12] if isinstance(value, str) else 'not-a-string'
+
+
 class OAuth:
     def __init__(self, store, origin, client_id, client_secret, owner_key, redirects):
         self.store, self.origin = store, origin
@@ -61,8 +65,18 @@ class OAuth:
 <button type="submit">Authorize connection</button></form></html>'''
 
     def approve(self, ticket, owner_key):
-        if not same(owner_key, self.owner_key):
-            raise ValueError('invalid_owner_key')
+        # Ignore accidental surrounding whitespace from clipboard/input handling,
+        # but keep the credential comparison exact otherwise. On mismatch expose
+        # only length and a short SHA-256 fingerprint so browser-vs-server
+        # transformation can be diagnosed without returning the secret itself.
+        submitted = owner_key.strip() if isinstance(owner_key, str) else owner_key
+        if not same(submitted, self.owner_key):
+            submitted_len = len(submitted) if isinstance(submitted, str) else -1
+            raise ValueError(
+                'invalid_owner_key '
+                f'submitted_len={submitted_len} expected_len={len(self.owner_key)} '
+                f'submitted_sha12={short_digest(submitted)} expected_sha12={short_digest(self.owner_key)}'
+            )
         params = self.store.get_oauth(digest(ticket), 'pending', consume=True)
         if not params:
             raise ValueError('authorization_expired')
