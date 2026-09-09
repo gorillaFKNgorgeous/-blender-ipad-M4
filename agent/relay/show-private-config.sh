@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: GPL-2.0-or-later
-# Print the only values needed to connect the private GhostBlender MCP bridge.
+# Print the values needed to connect the private GhostBlender MCP bridge.
 # Automatically finds the existing relay VM zone.
 set -Eeuo pipefail
 
@@ -32,4 +32,4 @@ gcloud compute ssh "$VM" \
     AGENT=$(sed -n "s/^AGENT_TOKEN=//p" .env) && \
     DEVICE_ID=$(sed -n "s/^DEVICE_ID=//p" .env) && \
     DEVICE_TOKEN=$(sed -n "s/^DEVICE_TOKEN=//p" .env) && \
-    printf "MCP_URL=%s/mcp/%s\nDEVICE_ID=%s\nDEVICE_TOKEN=%s\n" "$ORIGIN" "$AGENT" "$DEVICE_ID" "$DEVICE_TOKEN"'
+    printf "RELAY_URL=%s\nMCP_URL=%s/mcp/%s\nDEVICE_ID=%s\nDEVICE_TOKEN=%s\n" "$ORIGIN" "$ORIGIN" "$AGENT" "$DEVICE_ID" "$DEVICE_TOKEN"'
